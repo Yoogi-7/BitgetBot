@@ -16,9 +16,19 @@ class EnhancedFuturesStrategy:
         self.current_sentiment = {'overall_sentiment': 0, 'sentiment_signal': 'neutral'}
     
     def calculate_indicators(self, df):
-        """Oblicza wskaźniki techniczne"""
-        # RSI
-        df['rsi'] = ta.momentum.RSIIndicator(close=df['close'], window=Config.RSI_PERIOD).rsi()
+        """Oblicza wskaźniki techniczne dla skalpowania"""
+        # RSI dla różnych okresów (5-10)
+        df['rsi_5'] = ta.momentum.RSIIndicator(close=df['close'], window=5).rsi()
+        df['rsi_7'] = ta.momentum.RSIIndicator(close=df['close'], window=7).rsi()
+        df['rsi_10'] = ta.momentum.RSIIndicator(close=df['close'], window=10).rsi()
+        df['rsi_14'] = ta.momentum.RSIIndicator(close=df['close'], window=14).rsi()
+        
+        # VWAP (Volume-Weighted Average Price)
+        df['vwap'] = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+        
+        # ATR dla zmienności
+        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=14).average_true_range()
+        df['atr_5'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close'], window=5).average_true_range()
         
         # EMA
         df['ema_fast'] = ta.trend.EMAIndicator(close=df['close'], window=Config.EMA_FAST).ema_indicator()
@@ -29,12 +39,7 @@ class EnhancedFuturesStrategy:
         df['bb_upper'] = bollinger.bollinger_hband()
         df['bb_lower'] = bollinger.bollinger_lband()
         df['bb_middle'] = bollinger.bollinger_mavg()
-        
-        # ATR
-        df['atr'] = ta.volatility.AverageTrueRange(high=df['high'], low=df['low'], close=df['close']).average_true_range()
-        
-        # Volume
-        df['volume_sma'] = df['volume'].rolling(window=20).mean()
+        df['bb_width'] = (df['bb_upper'] - df['bb_lower']) / df['bb_middle']
         
         # MACD
         macd = ta.trend.MACD(close=df['close'])
@@ -44,6 +49,74 @@ class EnhancedFuturesStrategy:
         
         # Volatility
         df['volatility'] = df['close'].pct_change().rolling(window=20).std() * np.sqrt(20)
+        
+        # Volume analysis
+        df['volume_sma'] = df['volume'].rolling(window=20).mean()
+        df['volume_ratio'] = df['volume'] / df['volume_sma']
+        
+        return df
+    
+    def calculate_volume_features(self, df):
+        """Oblicza cechy związane z nagłymi zmianami wolumenu"""
+        # Podstawowe statystyki wolumenu
+        df['volume_ma_5'] = df['volume'].rolling(window=5).mean()
+        df['volume_ma_20'] = df['volume'].rolling(window=20).mean()
+        
+        # Detekcja skoków wolumenu (500% wzrost w 1 minutę)
+        df['volume_spike'] = df['volume'] / df['volume'].shift(1)
+        df['volume_spike_500'] = df['volume_spike'] > 5.0
+        
+        # Detekcja skoków względem średniej
+        df['volume_spike_ma'] = df['volume'] / df['volume_ma_20']
+        df['volume_spike_extreme'] = df['volume_spike_ma'] > 3.0  # 300% powyżej średniej
+        
+        # Analiza kierunku wolumenu (buy vs sell volume)
+        df['price_change'] = df['close'] - df['open']
+        df['buy_volume'] = df['volume'].where(df['price_change'] > 0, 0)
+        df['sell_volume'] = df['volume'].where(df['price_change'] < 0, 0)
+        
+        # Volume momentum
+        df['volume_momentum'] = df['volume'].rolling(window=5).mean() / df['volume'].rolling(window=20).mean()
+        
+        # Cumulative volume delta
+        df['volume_delta'] = df['buy_volume'] - df['sell_volume']
+        df['cumulative_volume_delta'] = df['volume_delta'].cumsum()
+        
+        return df
+    
+    def calculate_session_features(self, df):
+        """Oblicza cechy związane z sesjami handlowymi"""
+        # Konwertuj timestamp do UTC jeśli nie jest
+        if df['timestamp'].dt.tz is None:
+            df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize('UTC')
+        
+        # Godzina w UTC
+        df['hour_utc'] = df['timestamp'].dt.hour
+        df['minute_utc'] = df['timestamp'].dt.minute
+        df['day_of_week'] = df['timestamp'].dt.dayofweek
+        
+        # Sesje handlowe (w UTC)
+        # Azja: 00:00 - 08:00 UTC
+        # Europa: 07:00 - 16:00 UTC  
+        # USA: 13:00 - 22:00 UTC
+        
+        df['session_asia'] = ((df['hour_utc'] >= 0) & (df['hour_utc'] < 8)).astype(int)
+        df['session_europe'] = ((df['hour_utc'] >= 7) & (df['hour_utc'] < 16)).astype(int)
+        df['session_usa'] = ((df['hour_utc'] >= 13) & (df['hour_utc'] < 22)).astype(int)
+        
+        # Overlap sessions
+        df['session_asia_europe'] = ((df['hour_utc'] >= 7) & (df['hour_utc'] < 8)).astype(int)
+        df['session_europe_usa'] = ((df['hour_utc'] >= 13) & (df['hour_utc'] < 16)).astype(int)
+        
+        # Najwyższa płynność - gdy Europa i USA są aktywne
+        df['high_liquidity_hours'] = ((df['hour_utc'] >= 13) & (df['hour_utc'] < 16)).astype(int)
+        
+        # Weekend detection
+        df['is_weekend'] = df['day_of_week'].isin([5, 6]).astype(int)
+        
+        # Time-based features
+        df['minutes_since_day_start'] = df['hour_utc'] * 60 + df['minute_utc']
+        df['minutes_until_day_end'] = 1440 - df['minutes_since_day_start']
         
         return df
     
@@ -65,9 +138,14 @@ class EnhancedFuturesStrategy:
         
         # Aktualizuj tylko jeśli minął odpowiedni czas
         if current_time - self.last_sentiment_update > Config.SENTIMENT_UPDATE_INTERVAL:
-            self.current_sentiment = self.sentiment_analyzer.get_overall_sentiment()
-            self.last_sentiment_update = current_time
-            self.logger.info(f"Updated sentiment: {self.current_sentiment['sentiment_signal']} ({self.current_sentiment['overall_sentiment']:.2f})")
+            try:
+                self.current_sentiment = self.sentiment_analyzer.get_overall_sentiment()
+                self.last_sentiment_update = current_time
+                self.logger.info(f"Updated sentiment: {self.current_sentiment['sentiment_signal']} ({self.current_sentiment['overall_sentiment']:.2f})")
+            except Exception as e:
+                self.logger.warning(f"Could not update sentiment: {e}")
+                # Domyślny sentyment jeśli brak API
+                self.current_sentiment = {'overall_sentiment': 0, 'sentiment_signal': 'neutral'}
     
     def analyze_order_book(self, order_book, trade_size):
         """Analizuje order book"""
@@ -97,11 +175,14 @@ class EnhancedFuturesStrategy:
         }
     
     def generate_signal(self, df, existing_positions=[], order_book=None, recent_trades=None):
-        """Generuje sygnały tradingowe z uwzględnieniem order book i sentymentu"""
+        """Generuje sygnały tradingowe z uwzględnieniem nowych cech"""
         if df is None or len(df) < 50:
             return {'action': None, 'reason': 'Insufficient data'}
         
+        # Oblicz wszystkie wskaźniki i cechy
         df = self.calculate_indicators(df)
+        df = self.calculate_volume_features(df)
+        df = self.calculate_session_features(df)
         
         last = df.iloc[-1]
         prev = df.iloc[-2]
@@ -121,19 +202,31 @@ class EnhancedFuturesStrategy:
             'take_profit': None,
             'confidence': 0,
             'indicators': {
-                'rsi': last['rsi'],
+                'rsi_5': last['rsi_5'],
+                'rsi_7': last['rsi_7'],
+                'rsi_10': last['rsi_10'],
+                'rsi_14': last['rsi_14'],
+                'vwap': last['vwap'],
+                'price_vs_vwap': (last['close'] - last['vwap']) / last['vwap'] * 100,
                 'ema_fast': last['ema_fast'],
                 'ema_slow': last['ema_slow'],
                 'trend': self.check_trend(df),
-                'volume_ratio': last['volume'] / last['volume_sma'] if last['volume_sma'] > 0 else 1,
+                'volume_ratio': last['volume_ratio'],
+                'volume_spike_500': last['volume_spike_500'],
+                'volume_spike_extreme': last['volume_spike_extreme'],
                 'macd': last['macd'],
                 'macd_signal': last['macd_signal'],
                 'volatility': last['volatility'],
+                'atr_5': last['atr_5'],
+                'bb_width': last['bb_width'],
                 'sentiment': self.current_sentiment['sentiment_signal'],
                 'sentiment_score': self.current_sentiment['overall_sentiment'],
                 'order_book_imbalance': order_book_analysis['imbalance'],
                 'spread': order_book_analysis['spread'],
-                'liquidity': order_book_analysis['liquidity']['total_liquidity']
+                'liquidity': order_book_analysis['liquidity']['total_liquidity'],
+                'session': 'asia' if last['session_asia'] else 'europe' if last['session_europe'] else 'usa' if last['session_usa'] else 'other',
+                'high_liquidity_hours': last['high_liquidity_hours'],
+                'hour_utc': last['hour_utc']
             }
         }
         
@@ -146,175 +239,137 @@ class EnhancedFuturesStrategy:
             signal['reason'] = 'Insufficient liquidity'
             return signal
         
-        # Sprawdź czy wolumen jest wystarczający
-        if last['volume'] < last['volume_sma'] * Config.MIN_VOLUME_MULTIPLIER:
-            signal['reason'] = 'Low volume'
-            return signal
-        
         trend = self.check_trend(df)
         
-        # === ENHANCED LONG SIGNALS ===
-        if trend == 'bullish':
-            long_conditions = []
-            
-            # RSI Oversold Bounce
-            if last['rsi'] < Config.RSI_OVERSOLD and prev['rsi'] >= Config.RSI_OVERSOLD:
-                long_conditions.append(('rsi_oversold', 0.3))
-            
-            # Bollinger Band Bounce
-            if last['low'] <= last['bb_lower'] and last['close'] > last['bb_lower']:
-                long_conditions.append(('bb_bounce', 0.25))
-            
-            # MACD Crossover
-            if last['macd'] > last['macd_signal'] and prev['macd'] <= prev['macd_signal']:
-                long_conditions.append(('macd_cross', 0.25))
-            
-            # Order Book Imbalance (więcej bid orders)
-            if order_book_analysis['imbalance'] > Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
-                long_conditions.append(('order_book_buy_pressure', 0.2))
-            
-            # Positive sentiment
-            if self.current_sentiment['sentiment_signal'] == 'bullish':
-                long_conditions.append(('bullish_sentiment', Config.SENTIMENT_WEIGHT))
-            
-            # Large bid orders detected
-            if len(order_book_analysis['large_orders']['large_bids']) > 0:
-                long_conditions.append(('large_bid_support', 0.15))
-            
-            # Oblicz całkowitą pewność
-            if long_conditions:
-                total_confidence = sum(weight for _, weight in long_conditions)
-                reasons = ', '.join(reason for reason, _ in long_conditions)
-                
-                if total_confidence >= 0.7:
-                    signal['action'] = 'OPEN'
-                    signal['side'] = 'long'
-                    signal['reason'] = f'Bullish signals: {reasons}'
-                    signal['confidence'] = total_confidence
-                    
-                    # Dynamic stop loss based on volatility and liquidity
-                    volatility_multiplier = min(2.0, max(1.0, last['volatility'] * 10))
-                    signal['stop_loss'] = last['close'] - (last['atr'] * volatility_multiplier)
-                    signal['take_profit'] = last['close'] + (last['atr'] * 2.5)
+        # === ENHANCED SCALPING SIGNALS ===
+        long_conditions = []
+        short_conditions = []
         
-        # === ENHANCED SHORT SIGNALS ===
-        elif trend == 'bearish':
-            short_conditions = []
-            
-            # RSI Overbought Reversal
-            if last['rsi'] > Config.RSI_OVERBOUGHT and prev['rsi'] <= Config.RSI_OVERBOUGHT:
-                short_conditions.append(('rsi_overbought', 0.3))
-            
-            # Bollinger Band Rejection
-            if last['high'] >= last['bb_upper'] and last['close'] < last['bb_upper']:
-                short_conditions.append(('bb_rejection', 0.25))
-            
-            # MACD Crossover
-            if last['macd'] < last['macd_signal'] and prev['macd'] >= prev['macd_signal']:
-                short_conditions.append(('macd_cross', 0.25))
-            
-            # Order Book Imbalance (więcej ask orders)
-            if order_book_analysis['imbalance'] < -Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
-                short_conditions.append(('order_book_sell_pressure', 0.2))
-            
-            # Negative sentiment
-            if self.current_sentiment['sentiment_signal'] == 'bearish':
-                short_conditions.append(('bearish_sentiment', Config.SENTIMENT_WEIGHT))
-            
-            # Large ask orders detected
-            if len(order_book_analysis['large_orders']['large_asks']) > 0:
-                short_conditions.append(('large_ask_resistance', 0.15))
-            
-            # Oblicz całkowitą pewność
-            if short_conditions:
-                total_confidence = sum(weight for _, weight in short_conditions)
-                reasons = ', '.join(reason for reason, _ in short_conditions)
-                
-                if total_confidence >= 0.7:
-                    signal['action'] = 'OPEN'
-                    signal['side'] = 'short'
-                    signal['reason'] = f'Bearish signals: {reasons}'
-                    signal['confidence'] = total_confidence
-                    
-                    # Dynamic stop loss
-                    volatility_multiplier = min(2.0, max(1.0, last['volatility'] * 10))
-                    signal['stop_loss'] = last['close'] + (last['atr'] * volatility_multiplier)
-                    signal['take_profit'] = last['close'] - (last['atr'] * 2.5)
+        # Warunki dla LONG
+        # 1. RSI oversold na krótkim okresie
+        if last['rsi_5'] < 25 or last['rsi_7'] < 27:
+            long_conditions.append(('extreme_oversold_scalp', 0.3))
         
-        # === HIGH FREQUENCY SCALPING SIGNALS ===
-        if Config.HFT_ENABLED:
-            # Quick scalping na ekstremalnych warunkach
-            if last['rsi'] < 25 and order_book_analysis['imbalance'] > 0.5:
+        # 2. Price below VWAP + bounce
+        if last['close'] < last['vwap'] and last['close'] > prev['close']:
+            long_conditions.append(('vwap_bounce', 0.25))
+        
+        # 3. Volume spike with price increase
+        if last['volume_spike_500'] and last['close'] > prev['close']:
+            long_conditions.append(('volume_spike_buy', 0.35))
+        
+        # 4. High liquidity hours bonus
+        if last['high_liquidity_hours']:
+            long_conditions.append(('high_liquidity', 0.1))
+        
+        # 5. Order book imbalance
+        if order_book_analysis['imbalance'] > Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
+            long_conditions.append(('order_book_buy_pressure', 0.3))
+        
+        # 6. Bullish divergence (price down, RSI up)
+        if last['close'] < prev['close'] and last['rsi_5'] > prev['rsi_5']:
+            long_conditions.append(('bullish_divergence', 0.25))
+        
+        # Warunki dla SHORT
+        # 1. RSI overbought na krótkim okresie
+        if last['rsi_5'] > 75 or last['rsi_7'] > 73:
+            short_conditions.append(('extreme_overbought_scalp', 0.3))
+        
+        # 2. Price above VWAP + rejection
+        if last['close'] > last['vwap'] and last['close'] < prev['close']:
+            short_conditions.append(('vwap_rejection', 0.25))
+        
+        # 3. Volume spike with price decrease
+        if last['volume_spike_500'] and last['close'] < prev['close']:
+            short_conditions.append(('volume_spike_sell', 0.35))
+        
+        # 4. High liquidity hours bonus
+        if last['high_liquidity_hours']:
+            short_conditions.append(('high_liquidity', 0.1))
+        
+        # 5. Order book imbalance
+        if order_book_analysis['imbalance'] < -Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
+            short_conditions.append(('order_book_sell_pressure', 0.3))
+        
+        # 6. Bearish divergence (price up, RSI down)
+        if last['close'] > prev['close'] and last['rsi_5'] < prev['rsi_5']:
+            short_conditions.append(('bearish_divergence', 0.25))
+        
+        # Oblicz całkowitą pewność dla LONG
+        if long_conditions and trend != 'bearish':
+            total_confidence = sum(weight for _, weight in long_conditions)
+            reasons = ', '.join(reason for reason, _ in long_conditions)
+            
+            if total_confidence >= 0.7:
                 signal['action'] = 'OPEN'
                 signal['side'] = 'long'
-                signal['reason'] = 'HFT: Extreme oversold with buy pressure'
-                signal['confidence'] = 0.85
-                signal['stop_loss'] = last['close'] - (last['atr'] * 0.5)
-                signal['take_profit'] = last['close'] + (last['atr'] * 1.0)
-                signal['hft_trade'] = True
+                signal['reason'] = f'Scalp long: {reasons}'
+                signal['confidence'] = total_confidence
+                
+                # Dynamic stop loss based on ATR and volatility
+                atr_multiplier = 1.0 if last['high_liquidity_hours'] else 1.5
+                signal['stop_loss'] = last['close'] - (last['atr_5'] * atr_multiplier)
+                signal['take_profit'] = last['close'] + (last['atr_5'] * 2.0)
+                signal['scalp_trade'] = True
+        
+        # Oblicz całkowitą pewność dla SHORT
+        elif short_conditions and trend != 'bullish':
+            total_confidence = sum(weight for _, weight in short_conditions)
+            reasons = ', '.join(reason for reason, _ in short_conditions)
             
-            elif last['rsi'] > 75 and order_book_analysis['imbalance'] < -0.5:
+            if total_confidence >= 0.7:
                 signal['action'] = 'OPEN'
                 signal['side'] = 'short'
-                signal['reason'] = 'HFT: Extreme overbought with sell pressure'
-                signal['confidence'] = 0.85
-                signal['stop_loss'] = last['close'] + (last['atr'] * 0.5)
-                signal['take_profit'] = last['close'] - (last['atr'] * 1.0)
-                signal['hft_trade'] = True
+                signal['reason'] = f'Scalp short: {reasons}'
+                signal['confidence'] = total_confidence
+                
+                # Dynamic stop loss
+                atr_multiplier = 1.0 if last['high_liquidity_hours'] else 1.5
+                signal['stop_loss'] = last['close'] + (last['atr_5'] * atr_multiplier)
+                signal['take_profit'] = last['close'] - (last['atr_5'] * 2.0)
+                signal['scalp_trade'] = True
         
         # === EXIT SIGNALS ===
         for position in existing_positions:
             exit_conditions = []
             
             if position['side'] == 'long':
-                # Technical exit signals
-                if last['rsi'] > Config.RSI_OVERBOUGHT:
-                    exit_conditions.append('RSI overbought')
+                # Quick exit na ekstremalnym RSI
+                if last['rsi_5'] > 70:
+                    exit_conditions.append('RSI_5 extreme overbought')
                 
-                if trend == 'bearish':
-                    exit_conditions.append('Trend changed to bearish')
+                # Exit na VWAP
+                if last['close'] > last['vwap'] * 1.005:  # 0.5% powyżej VWAP
+                    exit_conditions.append('Price above VWAP target')
                 
-                if last['macd'] < last['macd_signal']:
-                    exit_conditions.append('MACD bearish cross')
+                # Volume exhaustion
+                if prev['volume_spike_500'] and last['volume'] < last['volume_ma_5']:
+                    exit_conditions.append('Volume exhaustion')
                 
-                # Order book exit signals
-                if order_book_analysis['imbalance'] < -0.3:
-                    exit_conditions.append('Strong sell pressure in order book')
-                
-                # Sentiment exit
-                if self.current_sentiment['sentiment_signal'] == 'bearish':
-                    exit_conditions.append('Sentiment turned bearish')
-                
-                # HFT quick exit
-                if position.get('hft_trade') and position.get('unrealized_pnl', 0) > 0:
-                    pnl_percent = (position['unrealized_pnl'] / position['size_usd']) * 100
-                    if pnl_percent >= Config.HFT_MIN_PROFIT_PERCENT:
-                        exit_conditions.append('HFT minimum profit reached')
+                # Time-based exit dla scalping
+                if position.get('scalp_trade'):
+                    hold_time = (datetime.now() - position.get('opened_at', datetime.now())).total_seconds()
+                    if hold_time > 300:  # 5 minut
+                        exit_conditions.append('Scalp time limit')
             
             elif position['side'] == 'short':
-                # Technical exit signals
-                if last['rsi'] < Config.RSI_OVERSOLD:
-                    exit_conditions.append('RSI oversold')
+                # Quick exit na ekstremalnym RSI
+                if last['rsi_5'] < 30:
+                    exit_conditions.append('RSI_5 extreme oversold')
                 
-                if trend == 'bullish':
-                    exit_conditions.append('Trend changed to bullish')
+                # Exit na VWAP
+                if last['close'] < last['vwap'] * 0.995:  # 0.5% poniżej VWAP
+                    exit_conditions.append('Price below VWAP target')
                 
-                if last['macd'] > last['macd_signal']:
-                    exit_conditions.append('MACD bullish cross')
+                # Volume exhaustion
+                if prev['volume_spike_500'] and last['volume'] < last['volume_ma_5']:
+                    exit_conditions.append('Volume exhaustion')
                 
-                # Order book exit signals
-                if order_book_analysis['imbalance'] > 0.3:
-                    exit_conditions.append('Strong buy pressure in order book')
-                
-                # Sentiment exit
-                if self.current_sentiment['sentiment_signal'] == 'bullish':
-                    exit_conditions.append('Sentiment turned bullish')
-                
-                # HFT quick exit
-                if position.get('hft_trade') and position.get('unrealized_pnl', 0) > 0:
-                    pnl_percent = (position['unrealized_pnl'] / position['size_usd']) * 100
-                    if pnl_percent >= Config.HFT_MIN_PROFIT_PERCENT:
-                        exit_conditions.append('HFT minimum profit reached')
+                # Time-based exit
+                if position.get('scalp_trade'):
+                    hold_time = (datetime.now() - position.get('opened_at', datetime.now())).total_seconds()
+                    if hold_time > 300:  # 5 minut
+                        exit_conditions.append('Scalp time limit')
             
             if exit_conditions:
                 signal['action'] = 'CLOSE'

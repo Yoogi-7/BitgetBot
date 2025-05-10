@@ -35,10 +35,11 @@ def print_banner():
     ========================================
     
     Features:
-    ✓ High-frequency data (15s candles)
+    ✓ Scalping optimized (RSI 5-10)
     ✓ Order book analysis (L2 depth)
-    ✓ Social sentiment analysis
-    ✓ Dynamic position sizing
+    ✓ Volume spike detection
+    ✓ VWAP trading
+    ✓ Session-based trading
     ✓ Advanced risk management
     
     Press Ctrl+C to stop
@@ -83,9 +84,10 @@ def main():
         else:
             logger.warning("Running in LIVE TRADING mode - real money will be used!")
         
-        if Config.HFT_ENABLED:
-            logger.info("High-Frequency Trading mode is ENABLED")
-            logger.info(f"Using {Config.HIGH_FREQUENCY_TIMEFRAME} timeframe for HFT")
+        if Config.SCALPING_ENABLED:
+            logger.info("Scalping mode is ENABLED")
+            logger.info(f"Min profit: {Config.SCALPING_MIN_PROFIT_PERCENT}%")
+            logger.info(f"Max hold time: {Config.SCALPING_MAX_HOLD_TIME} seconds")
         
         # Uruchom bota
         bot = EnhancedBitgetTradingBot()

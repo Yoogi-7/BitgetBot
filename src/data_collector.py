@@ -148,10 +148,35 @@ class DataCollector:
         try:
             orderbook = self.exchange.fetch_order_book(symbol, limit)
             return {
-                'bids': orderbook['bids'][:5],
-                'asks': orderbook['asks'][:5],
+                'bids': orderbook['bids'][:limit],
+                'asks': orderbook['asks'][:limit],
                 'timestamp': orderbook['timestamp']
             }
         except Exception as e:
             self.logger.error(f"Error fetching order book: {e}")
             return None
+    
+    def get_recent_trades(self, symbol=Config.TRADING_SYMBOL, limit=50):
+        """Pobiera ostatnie transakcje z rynku"""
+        try:
+            trades = self.exchange.fetch_trades(symbol, limit=limit)
+            
+            # Formatuj dane
+            formatted_trades = []
+            for trade in trades:
+                formatted_trades.append({
+                    'id': trade.get('id'),
+                    'timestamp': trade.get('timestamp'),
+                    'datetime': trade.get('datetime'),
+                    'symbol': trade.get('symbol'),
+                    'type': trade.get('type'),
+                    'side': trade.get('side'),
+                    'price': float(trade.get('price', 0)),
+                    'amount': float(trade.get('amount', 0)),
+                    'cost': float(trade.get('cost', 0))
+                })
+            
+            return formatted_trades
+        except Exception as e:
+            self.logger.error(f"Error fetching recent trades: {e}")
+            return []

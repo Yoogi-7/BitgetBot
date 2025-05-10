@@ -161,6 +161,7 @@ class EnhancedBitgetTradingBot:
                         'stop_loss': signal.get('stop_loss'),
                         'take_profit': signal.get('take_profit'),
                         'opened_at': datetime.now(),
+                        'scalp_trade': signal.get('scalp_trade', False),
                         'hft_trade': signal.get('hft_trade', False)
                     }
                     self.paper_positions.append(paper_position)
@@ -176,7 +177,7 @@ class EnhancedBitgetTradingBot:
                         'reason': signal['reason']
                     })
                     
-                    # Log do CSV
+                    # Log do CSV z dodatkowymi wskaźnikami
                     self.trade_logger.log_trade({
                         'timestamp': datetime.now().isoformat(),
                         'action': 'open',
@@ -184,10 +185,17 @@ class EnhancedBitgetTradingBot:
                         'price': entry_price,
                         'size': position_size_usd,
                         'reason': signal['reason'],
-                        'rsi': signal['indicators']['rsi'],
+                        'rsi_5': signal['indicators'].get('rsi_5', 0),
+                        'rsi_7': signal['indicators'].get('rsi_7', 0),
+                        'rsi_10': signal['indicators'].get('rsi_10', 0),
+                        'vwap': signal['indicators'].get('vwap', 0),
+                        'price_vs_vwap': signal['indicators'].get('price_vs_vwap', 0),
+                        'volume_spike': signal['indicators'].get('volume_spike_500', False),
                         'trend': signal['indicators']['trend'],
                         'sentiment': signal['indicators'].get('sentiment', 'neutral'),
                         'order_book_imbalance': signal['indicators'].get('order_book_imbalance', 0),
+                        'session': signal['indicators'].get('session', 'other'),
+                        'high_liquidity': signal['indicators'].get('high_liquidity_hours', 0),
                         'balance_after': self.paper_balance
                     })
                     
@@ -283,9 +291,9 @@ class EnhancedBitgetTradingBot:
             else:
                 position['unrealized_pnl'] = (position['entry_price'] - current_price) * position['size']
             
-            # Sprawdź HFT time limit
-            if position.get('hft_trade') and (current_time - position['opened_at'].timestamp()) > Config.HFT_MAX_HOLD_TIME:
-                self.close_position(position, "HFT time limit exceeded")
+            # Sprawdź czas trzymania dla scalping
+            if position.get('scalp_trade') and (current_time - position['opened_at'].timestamp()) > Config.SCALPING_MAX_HOLD_TIME:
+                self.close_position(position, "Scalping time limit exceeded")
     
     def manage_positions(self, signal_analysis=None):
         """Zarządza otwartymi pozycjami"""
@@ -298,13 +306,13 @@ class EnhancedBitgetTradingBot:
             current_price = position['mark_price']
             entry_price = position['entry_price']
             
-            # Dodatkowe warunki wyjścia dla HFT
-            if position.get('hft_trade'):
+            # Dodatkowe warunki wyjścia dla skalpowania
+            if position.get('scalp_trade'):
                 pnl_percent = (position['unrealized_pnl'] / position['notional']) * 100
                 
-                # Szybkie wyjście dla HFT
-                if pnl_percent >= Config.HFT_MIN_PROFIT_PERCENT:
-                    self.close_position(position, "HFT profit target reached")
+                # Szybkie wyjście dla skalpowania
+                if pnl_percent >= Config.SCALPING_MIN_PROFIT_PERCENT:
+                    self.close_position(position, "Scalping profit target reached")
                     continue
             
             if position['side'] == 'long':
@@ -330,15 +338,8 @@ class EnhancedBitgetTradingBot:
             if not self.check_risk_limits():
                 return
             
-            # Pobierz dane - użyj wysokiej częstotliwości jeśli włączone
-            if Config.HFT_ENABLED:
-                df = self.data_collector.get_high_frequency_data(
-                    symbol=Config.TRADING_SYMBOL,
-                    timeframe=Config.HIGH_FREQUENCY_TIMEFRAME,
-                    limit=150
-                )
-            else:
-                df = self.data_collector.get_ohlcv_data(limit=100)
+            # Pobierz dane
+            df = self.data_collector.get_ohlcv_data(limit=100)
             
             if df is None or df.empty:
                 return
@@ -363,9 +364,11 @@ class EnhancedBitgetTradingBot:
             if ticker:
                 self.logger.info(
                     f"BTC Price: {ticker['last']:.2f}, "
-                    f"RSI: {signal['indicators']['rsi']:.2f}, "
+                    f"RSI_5: {signal['indicators'].get('rsi_5', 0):.2f}, "
+                    f"RSI_7: {signal['indicators'].get('rsi_7', 0):.2f}, "
+                    f"VWAP: {signal['indicators'].get('vwap', 0):.2f}, "
+                    f"Vol Spike: {signal['indicators'].get('volume_spike_500', False)}, "
                     f"Trend: {signal['indicators']['trend']}, "
-                    f"Sentiment: {signal['indicators'].get('sentiment', 'neutral')}, "
                     f"OB Imbalance: {signal['indicators'].get('order_book_imbalance', 0):.2f}"
                 )
             
@@ -374,11 +377,11 @@ class EnhancedBitgetTradingBot:
             
             # Wykonaj akcję na podstawie sygnału
             if signal['action'] == 'OPEN' and signal['confidence'] >= 0.7:
-                # Dodatkowe sprawdzenie dla HFT
-                if signal.get('hft_trade'):
+                # Dodatkowe sprawdzenie dla skalpowania
+                if signal.get('scalp_trade'):
                     current_time = time.time()
-                    if current_time - self.last_trade_time < 60:  # Minimalna przerwa między tradami HFT
-                        self.logger.info("HFT: Waiting for cooldown period")
+                    if current_time - self.last_trade_time < 60:  # Minimalna przerwa między tradami
+                        self.logger.info("Scalping: Waiting for cooldown period")
                         return
                 
                 self.open_position(signal)
@@ -428,7 +431,7 @@ class EnhancedBitgetTradingBot:
         self.logger.info(f"Trading pair: {Config.TRADING_SYMBOL}")
         self.logger.info(f"Leverage: {Config.LEVERAGE}x")
         self.logger.info(f"Check interval: {Config.CHECK_INTERVAL} seconds")
-        self.logger.info(f"HFT Enabled: {Config.HFT_ENABLED}")
+        self.logger.info(f"Scalping Enabled: {Config.SCALPING_ENABLED}")
         
         # Notify Telegram about bot start
         self.telegram.notify_bot_start()
