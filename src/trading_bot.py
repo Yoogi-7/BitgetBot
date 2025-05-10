@@ -6,12 +6,14 @@ from config.settings import Config
 from src.data_collector import DataCollector
 from src.strategies import FuturesStrategy
 from src.trade_logger import TradeLogger
+from src.telegram_notifier import TelegramNotifier
 
 class BitgetTradingBot:
     def __init__(self):
         self.data_collector = DataCollector()
         self.strategy = FuturesStrategy()
         self.trade_logger = TradeLogger()
+        self.telegram = TelegramNotifier()
         self.logger = logging.getLogger(__name__)
         
         # Stan bota
@@ -181,11 +183,15 @@ class BitgetTradingBot:
                         'trend': signal['indicators']['trend'],
                         'balance_after': self.paper_balance
                     })
+                    
+                    # Telegram notification
+                    self.telegram.notify_trade_opened(signal['side'], entry_price, position_size_usd, signal['reason'])
                 
                 self.trades_today += 1
                 
         except Exception as e:
             self.logger.error(f"Error opening position: {e}")
+            self.telegram.notify_error(f"Error opening position: {e}")
     
     def close_position(self, position, reason="Manual close"):
         """Zamyka istniejącą pozycję"""
@@ -234,6 +240,9 @@ class BitgetTradingBot:
                         'reason': reason,
                         'balance_after': self.paper_balance
                     })
+                    
+                    # Telegram notification
+                    self.telegram.notify_trade_closed(position['side'], position['entry_price'], current_price, pnl, reason)
                 else:
                     pnl = position.get('unrealized_pnl', 0)
                 
@@ -243,6 +252,7 @@ class BitgetTradingBot:
                 
         except Exception as e:
             self.logger.error(f"Error closing position: {e}")
+            self.telegram.notify_error(f"Error closing position: {e}")
     
     def update_paper_positions(self):
         """Aktualizuje ceny i PnL dla paper positions"""
@@ -334,6 +344,7 @@ class BitgetTradingBot:
             
         except Exception as e:
             self.logger.error(f"Error in trading cycle: {e}")
+            self.telegram.notify_error(f"Trading cycle error: {e}")
     
     def generate_daily_summary(self):
         """Generuje dzienne podsumowanie"""
@@ -366,6 +377,9 @@ class BitgetTradingBot:
         self.logger.info(f"Leverage: {Config.LEVERAGE}x")
         self.logger.info(f"Check interval: {Config.CHECK_INTERVAL} seconds")
         
+        # Notify Telegram about bot start
+        self.telegram.notify_bot_start()
+        
         try:
             while True:
                 try:
@@ -389,7 +403,13 @@ class BitgetTradingBot:
                 if 'win_rate' in summary:
                     self.logger.info(f"[PAPER] Win rate: {summary['win_rate']:.2f}%")
             
+            # Notify Telegram about bot stop and daily summary
+            self.telegram.notify_bot_stop()
+            if summary.get('total_trades', 0) > 0:
+                self.telegram.notify_daily_summary(summary)
+            
             self.logger.info("=== Trading session ended ===")
         except Exception as e:
             self.logger.error(f"Unexpected error: {e}")
+            self.telegram.notify_error(f"Bot crashed: {e}")
             self.logger.info("Bot stopped due to error")

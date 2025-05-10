@@ -48,3 +48,7 @@ class Config:
     # Safety
     USE_TESTNET = False  # True = testnet, False = mainnet
     PAPER_TRADING = True  # Jeśli True, tylko symuluje transakcje
+    
+    # Telegram notifications
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
