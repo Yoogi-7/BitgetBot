@@ -74,7 +74,9 @@ class FuturesStrategy:
                 'ema_fast': last['ema_fast'],
                 'ema_slow': last['ema_slow'],
                 'trend': self.check_trend(df),
-                'volume_ratio': last['volume'] / last['volume_sma'] if last['volume_sma'] > 0 else 1
+                'volume_ratio': last['volume'] / last['volume_sma'] if last['volume_sma'] > 0 else 1,
+                'macd': last['macd'],
+                'macd_signal': last['macd_signal']
             }
         }
         
@@ -104,6 +106,15 @@ class FuturesStrategy:
                 signal['confidence'] = 0.7
                 signal['stop_loss'] = last['bb_lower'] - (last['atr'] * 0.5)
                 signal['take_profit'] = last['bb_middle']
+            
+            # MACD Crossover
+            elif last['macd'] > last['macd_signal'] and prev['macd'] <= prev['macd_signal']:
+                signal['action'] = 'OPEN'
+                signal['side'] = 'long'
+                signal['reason'] = 'MACD bullish crossover'
+                signal['confidence'] = 0.75
+                signal['stop_loss'] = last['close'] - (last['atr'] * 1.5)
+                signal['take_profit'] = last['close'] + (last['atr'] * 2.5)
         
         # === SHORT SIGNALS ===
         elif trend == 'bearish':
@@ -124,6 +135,33 @@ class FuturesStrategy:
                 signal['confidence'] = 0.7
                 signal['stop_loss'] = last['bb_upper'] + (last['atr'] * 0.5)
                 signal['take_profit'] = last['bb_middle']
+            
+            # MACD Crossover
+            elif last['macd'] < last['macd_signal'] and prev['macd'] >= prev['macd_signal']:
+                signal['action'] = 'OPEN'
+                signal['side'] = 'short'
+                signal['reason'] = 'MACD bearish crossover'
+                signal['confidence'] = 0.75
+                signal['stop_loss'] = last['close'] + (last['atr'] * 1.5)
+                signal['take_profit'] = last['close'] - (last['atr'] * 2.5)
+        
+        # === SCALPING SIGNALS (niezależne od trendu) ===
+        # Extreme RSI conditions
+        if last['rsi'] < 25 and last['volume'] > last['volume_sma'] * 2:
+            signal['action'] = 'OPEN'
+            signal['side'] = 'long'
+            signal['reason'] = 'Extreme oversold with high volume'
+            signal['confidence'] = 0.85
+            signal['stop_loss'] = last['close'] - (last['atr'] * 1)
+            signal['take_profit'] = last['close'] + (last['atr'] * 1.5)
+        
+        elif last['rsi'] > 75 and last['volume'] > last['volume_sma'] * 2:
+            signal['action'] = 'OPEN'
+            signal['side'] = 'short'
+            signal['reason'] = 'Extreme overbought with high volume'
+            signal['confidence'] = 0.85
+            signal['stop_loss'] = last['close'] + (last['atr'] * 1)
+            signal['take_profit'] = last['close'] - (last['atr'] * 1.5)
         
         # === EXIT SIGNALS (dla istniejących pozycji) ===
         for position in existing_positions:
@@ -134,6 +172,12 @@ class FuturesStrategy:
                     signal['side'] = 'long'
                     signal['reason'] = 'Exit long - overbought or trend change'
                     signal['confidence'] = 0.9
+                # Exit jeśli MACD cross
+                elif last['macd'] < last['macd_signal']:
+                    signal['action'] = 'CLOSE'
+                    signal['side'] = 'long'
+                    signal['reason'] = 'Exit long - MACD bearish cross'
+                    signal['confidence'] = 0.85
             
             elif position['side'] == 'short':
                 # Exit short jeśli RSI oversold lub trend się zmienia
@@ -142,6 +186,12 @@ class FuturesStrategy:
                     signal['side'] = 'short'
                     signal['reason'] = 'Exit short - oversold or trend change'
                     signal['confidence'] = 0.9
+                # Exit jeśli MACD cross
+                elif last['macd'] > last['macd_signal']:
+                    signal['action'] = 'CLOSE'
+                    signal['side'] = 'short'
+                    signal['reason'] = 'Exit short - MACD bullish cross'
+                    signal['confidence'] = 0.85
         
         return signal
     

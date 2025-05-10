@@ -5,11 +5,13 @@ from datetime import datetime
 from config.settings import Config
 from src.data_collector import DataCollector
 from src.strategies import FuturesStrategy
+from src.trade_logger import TradeLogger
 
 class BitgetTradingBot:
     def __init__(self):
         self.data_collector = DataCollector()
         self.strategy = FuturesStrategy()
+        self.trade_logger = TradeLogger()
         self.logger = logging.getLogger(__name__)
         
         # Stan bota
@@ -166,6 +168,19 @@ class BitgetTradingBot:
                         'size': position_size_usd,
                         'reason': signal['reason']
                     })
+                    
+                    # Log do CSV
+                    self.trade_logger.log_trade({
+                        'timestamp': datetime.now().isoformat(),
+                        'action': 'open',
+                        'side': signal['side'],
+                        'price': entry_price,
+                        'size': position_size_usd,
+                        'reason': signal['reason'],
+                        'rsi': signal['indicators']['rsi'],
+                        'trend': signal['indicators']['trend'],
+                        'balance_after': self.paper_balance
+                    })
                 
                 self.trades_today += 1
                 
@@ -207,6 +222,18 @@ class BitgetTradingBot:
                         'pnl': pnl,
                         'reason': reason
                     })
+                    
+                    # Log do CSV
+                    self.trade_logger.log_trade({
+                        'timestamp': datetime.now().isoformat(),
+                        'action': 'close',
+                        'side': position['side'],
+                        'price': current_price,
+                        'size': position['notional'],
+                        'pnl': pnl,
+                        'reason': reason,
+                        'balance_after': self.paper_balance
+                    })
                 else:
                     pnl = position.get('unrealized_pnl', 0)
                 
@@ -244,7 +271,7 @@ class BitgetTradingBot:
         
         positions = self.get_positions()
         
-        for position in positions:
+        for position in positions[:]:  # Kopia listy do iteracji
             current_price = position['mark_price']
             entry_price = position['entry_price']
             
@@ -308,6 +335,29 @@ class BitgetTradingBot:
         except Exception as e:
             self.logger.error(f"Error in trading cycle: {e}")
     
+    def generate_daily_summary(self):
+        """Generuje dzienne podsumowanie"""
+        summary = {
+            'date': datetime.now().strftime('%Y-%m-%d'),
+            'trading_mode': 'PAPER' if Config.PAPER_TRADING else 'LIVE',
+            'total_trades': self.trades_today,
+            'daily_pnl': self.daily_pnl,
+            'final_balance': self.paper_balance if Config.PAPER_TRADING else 'N/A',
+            'positions': len(self.get_positions()),
+            'runtime_hours': (datetime.now() - self.startup_time).total_seconds() / 3600
+        }
+        
+        if Config.PAPER_TRADING and self.paper_trades:
+            closed_trades = [t for t in self.paper_trades if t.get('action') == 'close']
+            if closed_trades:
+                winning_trades = [t for t in closed_trades if t.get('pnl', 0) > 0]
+                summary['win_rate'] = len(winning_trades) / len(closed_trades) * 100
+                summary['avg_win'] = sum(t.get('pnl', 0) for t in winning_trades) / len(winning_trades) if winning_trades else 0
+                summary['avg_loss'] = sum(t.get('pnl', 0) for t in closed_trades if t.get('pnl', 0) < 0) / len([t for t in closed_trades if t.get('pnl', 0) < 0]) if any(t.get('pnl', 0) < 0 for t in closed_trades) else 0
+        
+        self.trade_logger.save_daily_summary(summary)
+        return summary
+    
     def start(self):
         """Uruchamia bota"""
         mode = "PAPER TRADING" if Config.PAPER_TRADING else "LIVE TRADING"
@@ -316,17 +366,30 @@ class BitgetTradingBot:
         self.logger.info(f"Leverage: {Config.LEVERAGE}x")
         self.logger.info(f"Check interval: {Config.CHECK_INTERVAL} seconds")
         
-        while True:
-            try:
-                self.run_trading_cycle()
-                time.sleep(Config.CHECK_INTERVAL)
-            except KeyboardInterrupt:
-                self.logger.info("Bot stopped by user")
-                if Config.PAPER_TRADING and self.paper_trades:
-                    self.logger.info(f"[PAPER] Final balance: {self.paper_balance:.2f} USDT")
-                    self.logger.info(f"[PAPER] Total trades: {len(self.paper_trades)}")
-                    self.logger.info(f"[PAPER] Final PnL: {self.paper_balance - 1000:.2f} USDT")
-                break
-            except Exception as e:
-                self.logger.error(f"Unexpected error: {e}")
-                time.sleep(60)
+        try:
+            while True:
+                try:
+                    self.run_trading_cycle()
+                    time.sleep(Config.CHECK_INTERVAL)
+                except KeyboardInterrupt:
+                    raise
+                except Exception as e:
+                    self.logger.error(f"Error in trading cycle: {e}")
+                    time.sleep(60)
+        
+        except KeyboardInterrupt:
+            self.logger.info("\n=== Bot stopped by user ===")
+            summary = self.generate_daily_summary()
+            
+            if Config.PAPER_TRADING and self.paper_trades:
+                self.logger.info(f"[PAPER] Final balance: {self.paper_balance:.2f} USDT")
+                self.logger.info(f"[PAPER] Total trades: {len(self.paper_trades)}")
+                self.logger.info(f"[PAPER] Final PnL: {self.paper_balance - 1000:.2f} USDT")
+                
+                if 'win_rate' in summary:
+                    self.logger.info(f"[PAPER] Win rate: {summary['win_rate']:.2f}%")
+            
+            self.logger.info("=== Trading session ended ===")
+        except Exception as e:
+            self.logger.error(f"Unexpected error: {e}")
+            self.logger.info("Bot stopped due to error")

@@ -1,4 +1,26 @@
+# Environments
 .env
+
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
 logs/
+*.log
+
+# Trading data
+trading_history.csv
+summary_*.json
+trading_report_*.png
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
