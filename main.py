@@ -63,6 +63,12 @@ def main():
                 logger.info("Exiting...")
                 sys.exit(0)
         
+        # Informacja o trybie paper trading
+        if Config.PAPER_TRADING:
+            logger.info("Running in PAPER TRADING mode - all trades are simulated")
+        else:
+            logger.warning("Running in LIVE TRADING mode - real money will be used!")
+        
         # Uruchom bota
         bot = BitgetTradingBot()
         bot.start()
