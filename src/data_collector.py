@@ -19,7 +19,6 @@ class DataCollector:
             }
         }
         
-        # Usuń konfigurację testnet - użyjemy głównego API
         self.logger = logging.getLogger(__name__)
         self.exchange = ccxt.bitget(exchange_config)
         
@@ -29,7 +28,6 @@ class DataCollector:
     def test_connection(self):
         """Testuje połączenie z API"""
         try:
-            # Próbuj pobrać ticker żeby sprawdzić czy API działa
             self.exchange.load_markets()
             test_ticker = self.exchange.fetch_ticker('BTC/USDT:USDT')
             self.logger.info(f"Successfully connected to Bitget. BTC Price: {test_ticker['last']}")
@@ -40,7 +38,6 @@ class DataCollector:
     def set_leverage(self, symbol=Config.TRADING_SYMBOL, leverage=Config.LEVERAGE):
         """Ustawia dźwignię dla symbolu"""
         try:
-            # Dla paper trading pomijamy
             if Config.PAPER_TRADING:
                 self.logger.info(f"[PAPER] Would set leverage to {leverage}x for {symbol}")
                 return
@@ -55,9 +52,8 @@ class DataCollector:
         """Pobiera saldo futures"""
         try:
             if Config.PAPER_TRADING:
-                # Symuluj saldo dla paper trading
                 return {
-                    'available': 1000.0,  # Symulowane 1000 USDT
+                    'available': 1000.0,
                     'used': 0.0,
                     'total': 1000.0
                 }
@@ -78,7 +74,6 @@ class DataCollector:
         """Pobiera otwarte pozycje"""
         try:
             if Config.PAPER_TRADING:
-                # Dla paper trading zwróć pustą listę
                 return []
             
             positions = self.exchange.fetch_positions([symbol])
@@ -101,6 +96,24 @@ class DataCollector:
         except Exception as e:
             self.logger.error(f"Error fetching positions: {e}")
             return []
+    
+    def get_high_frequency_data(self, symbol=Config.TRADING_SYMBOL, timeframe='15s', limit=100):
+        """Pobiera dane wysokiej częstotliwości (15-sekundowe)"""
+        try:
+            # Sprawdź czy giełda obsługuje 15s timeframe
+            if timeframe == '15s' and '15s' not in self.exchange.timeframes:
+                self.logger.warning("15s timeframe not supported, using 1m instead")
+                timeframe = '1m'
+            
+            ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
+            df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
+            df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            self.logger.debug(f"Fetched {len(df)} {timeframe} candles for {symbol}")
+            return df
+        except Exception as e:
+            self.logger.error(f"Error fetching high frequency data: {e}")
+            return None
     
     def get_ohlcv_data(self, symbol=Config.TRADING_SYMBOL, timeframe=Config.TIMEFRAME, limit=100):
         """Pobiera dane OHLCV"""

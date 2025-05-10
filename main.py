@@ -3,7 +3,7 @@ import logging
 import sys
 from datetime import datetime
 import os
-from src.trading_bot import BitgetTradingBot
+from src.trading_bot import EnhancedBitgetTradingBot
 
 def setup_logging():
     """Konfiguruje system logowania"""
@@ -12,7 +12,7 @@ def setup_logging():
         os.makedirs('logs')
     
     # Nazwa pliku z datą
-    log_filename = f'logs/bitget_bot_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    log_filename = f'logs/enhanced_bot_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
     
     # Konfiguracja logowania
     logging.basicConfig(
@@ -30,9 +30,16 @@ def setup_logging():
 def print_banner():
     """Wyświetla banner startowy"""
     banner = """
-    ================================
-    🚀 Bitget Futures Trading Bot 🚀
-    ================================
+    ========================================
+    🚀 Enhanced Bitget Futures Trading Bot 🚀
+    ========================================
+    
+    Features:
+    ✓ High-frequency data (15s candles)
+    ✓ Order book analysis (L2 depth)
+    ✓ Social sentiment analysis
+    ✓ Dynamic position sizing
+    ✓ Advanced risk management
     
     Press Ctrl+C to stop
     Check logs/ folder for detailed logs
@@ -56,6 +63,13 @@ def main():
             logger.error("API keys not found! Please check your .env file")
             sys.exit(1)
         
+        # Sprawdź opcjonalne API keys
+        if not Config.TWITTER_BEARER_TOKEN:
+            logger.warning("Twitter API not configured - sentiment analysis will be limited")
+        
+        if not Config.CRYPTOPANIC_API_KEY:
+            logger.warning("CryptoPanic API not configured - news sentiment will be limited")
+        
         # Ostrzeżenie dla mainnet
         if not Config.USE_TESTNET:
             response = input("WARNING: Bot is configured for MAINNET. Are you sure? (yes/no): ")
@@ -63,14 +77,18 @@ def main():
                 logger.info("Exiting...")
                 sys.exit(0)
         
-        # Informacja o trybie paper trading
+        # Informacja o trybie
         if Config.PAPER_TRADING:
             logger.info("Running in PAPER TRADING mode - all trades are simulated")
         else:
             logger.warning("Running in LIVE TRADING mode - real money will be used!")
         
+        if Config.HFT_ENABLED:
+            logger.info("High-Frequency Trading mode is ENABLED")
+            logger.info(f"Using {Config.HIGH_FREQUENCY_TIMEFRAME} timeframe for HFT")
+        
         # Uruchom bota
-        bot = BitgetTradingBot()
+        bot = EnhancedBitgetTradingBot()
         bot.start()
         
     except KeyboardInterrupt:

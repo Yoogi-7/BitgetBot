@@ -4,14 +4,14 @@ import time
 from datetime import datetime
 from config.settings import Config
 from src.data_collector import DataCollector
-from src.strategies import FuturesStrategy
+from src.strategies import EnhancedFuturesStrategy
 from src.trade_logger import TradeLogger
 from src.telegram_notifier import TelegramNotifier
 
-class BitgetTradingBot:
+class EnhancedBitgetTradingBot:
     def __init__(self):
         self.data_collector = DataCollector()
-        self.strategy = FuturesStrategy()
+        self.strategy = EnhancedFuturesStrategy()
         self.trade_logger = TradeLogger()
         self.telegram = TelegramNotifier()
         self.logger = logging.getLogger(__name__)
@@ -24,8 +24,12 @@ class BitgetTradingBot:
         # Paper trading state
         if Config.PAPER_TRADING:
             self.paper_positions = []
-            self.paper_balance = 1000.0  # Start z 1000 USDT
+            self.paper_balance = 1000.0
             self.paper_trades = []
+        
+        # High frequency tracking
+        self.last_trade_time = 0
+        self.hft_positions = []
         
         # Inicjalizacja
         self.initialize()
@@ -156,7 +160,8 @@ class BitgetTradingBot:
                         'unrealized_pnl': 0,
                         'stop_loss': signal.get('stop_loss'),
                         'take_profit': signal.get('take_profit'),
-                        'opened_at': datetime.now()
+                        'opened_at': datetime.now(),
+                        'hft_trade': signal.get('hft_trade', False)
                     }
                     self.paper_positions.append(paper_position)
                     self.paper_balance -= position_size_usd
@@ -181,6 +186,8 @@ class BitgetTradingBot:
                         'reason': signal['reason'],
                         'rsi': signal['indicators']['rsi'],
                         'trend': signal['indicators']['trend'],
+                        'sentiment': signal['indicators'].get('sentiment', 'neutral'),
+                        'order_book_imbalance': signal['indicators'].get('order_book_imbalance', 0),
                         'balance_after': self.paper_balance
                     })
                     
@@ -188,6 +195,7 @@ class BitgetTradingBot:
                     self.telegram.notify_trade_opened(signal['side'], entry_price, position_size_usd, signal['reason'])
                 
                 self.trades_today += 1
+                self.last_trade_time = time.time()
                 
         except Exception as e:
             self.logger.error(f"Error opening position: {e}")
@@ -264,6 +272,7 @@ class BitgetTradingBot:
             return
         
         current_price = ticker['last']
+        current_time = time.time()
         
         for position in self.paper_positions:
             position['mark_price'] = current_price
@@ -273,8 +282,12 @@ class BitgetTradingBot:
                 position['unrealized_pnl'] = (current_price - position['entry_price']) * position['size']
             else:
                 position['unrealized_pnl'] = (position['entry_price'] - current_price) * position['size']
+            
+            # Sprawdź HFT time limit
+            if position.get('hft_trade') and (current_time - position['opened_at'].timestamp()) > Config.HFT_MAX_HOLD_TIME:
+                self.close_position(position, "HFT time limit exceeded")
     
-    def manage_positions(self):
+    def manage_positions(self, signal_analysis=None):
         """Zarządza otwartymi pozycjami"""
         if Config.PAPER_TRADING:
             self.update_paper_positions()
@@ -284,6 +297,15 @@ class BitgetTradingBot:
         for position in positions[:]:  # Kopia listy do iteracji
             current_price = position['mark_price']
             entry_price = position['entry_price']
+            
+            # Dodatkowe warunki wyjścia dla HFT
+            if position.get('hft_trade'):
+                pnl_percent = (position['unrealized_pnl'] / position['notional']) * 100
+                
+                # Szybkie wyjście dla HFT
+                if pnl_percent >= Config.HFT_MIN_PROFIT_PERCENT:
+                    self.close_position(position, "HFT profit target reached")
+                    continue
             
             if position['side'] == 'long':
                 # Stop loss dla long
@@ -308,27 +330,57 @@ class BitgetTradingBot:
             if not self.check_risk_limits():
                 return
             
-            # Pobierz dane
-            df = self.data_collector.get_ohlcv_data(limit=100)
+            # Pobierz dane - użyj wysokiej częstotliwości jeśli włączone
+            if Config.HFT_ENABLED:
+                df = self.data_collector.get_high_frequency_data(
+                    symbol=Config.TRADING_SYMBOL,
+                    timeframe=Config.HIGH_FREQUENCY_TIMEFRAME,
+                    limit=150
+                )
+            else:
+                df = self.data_collector.get_ohlcv_data(limit=100)
+            
             if df is None or df.empty:
                 return
+            
+            # Pobierz order book i ostatnie transakcje
+            order_book = self.data_collector.get_order_book()
+            recent_trades = self.data_collector.get_recent_trades()
             
             # Pobierz aktualne pozycje
             positions = self.get_positions()
             
-            # Generuj sygnał
-            signal = self.strategy.generate_signal(df, positions)
+            # Generuj sygnał z pełną analizą
+            signal = self.strategy.generate_signal(
+                df=df,
+                existing_positions=positions,
+                order_book=order_book,
+                recent_trades=recent_trades
+            )
             
             # Log aktualnego stanu
             ticker = self.data_collector.get_ticker()
             if ticker:
-                self.logger.info(f"BTC Price: {ticker['last']:.2f}, RSI: {signal['indicators']['rsi']:.2f}, Trend: {signal['indicators']['trend']}")
+                self.logger.info(
+                    f"BTC Price: {ticker['last']:.2f}, "
+                    f"RSI: {signal['indicators']['rsi']:.2f}, "
+                    f"Trend: {signal['indicators']['trend']}, "
+                    f"Sentiment: {signal['indicators'].get('sentiment', 'neutral')}, "
+                    f"OB Imbalance: {signal['indicators'].get('order_book_imbalance', 0):.2f}"
+                )
             
             # Zarządzaj pozycjami
-            self.manage_positions()
+            self.manage_positions(signal_analysis=signal)
             
             # Wykonaj akcję na podstawie sygnału
             if signal['action'] == 'OPEN' and signal['confidence'] >= 0.7:
+                # Dodatkowe sprawdzenie dla HFT
+                if signal.get('hft_trade'):
+                    current_time = time.time()
+                    if current_time - self.last_trade_time < 60:  # Minimalna przerwa między tradami HFT
+                        self.logger.info("HFT: Waiting for cooldown period")
+                        return
+                
                 self.open_position(signal)
             elif signal['action'] == 'CLOSE':
                 # Znajdź pozycję do zamknięcia
@@ -372,10 +424,11 @@ class BitgetTradingBot:
     def start(self):
         """Uruchamia bota"""
         mode = "PAPER TRADING" if Config.PAPER_TRADING else "LIVE TRADING"
-        self.logger.info(f"=== Bitget Futures Trading Bot Started ({mode}) ===")
+        self.logger.info(f"=== Enhanced Bitget Futures Trading Bot Started ({mode}) ===")
         self.logger.info(f"Trading pair: {Config.TRADING_SYMBOL}")
         self.logger.info(f"Leverage: {Config.LEVERAGE}x")
         self.logger.info(f"Check interval: {Config.CHECK_INTERVAL} seconds")
+        self.logger.info(f"HFT Enabled: {Config.HFT_ENABLED}")
         
         # Notify Telegram about bot start
         self.telegram.notify_bot_start()
