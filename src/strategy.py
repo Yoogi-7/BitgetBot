@@ -57,8 +57,8 @@ class TradingStrategy:
             ).rsi().iloc[-1]
         
         # EMA trend
-        ema_fast = df['close'].ewm(span=Config.EMA_FAST).mean()
-        ema_slow = df['close'].ewm(span=Config.EMA_SLOW).mean()
+        ema_fast = df['close'].ewm(span=Config.EMA_SHORT).mean()
+        ema_slow = df['close'].ewm(span=Config.EMA_LONG).mean()
         
         self.indicators['ema_fast'] = ema_fast.iloc[-1]
         self.indicators['ema_slow'] = ema_slow.iloc[-1]
