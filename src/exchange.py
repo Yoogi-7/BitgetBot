@@ -93,7 +93,7 @@ class ExchangeConnector:
             return []
     
     def get_ohlcv(self, symbol: str = Config.TRADING_SYMBOL, 
-                  timeframe: str = Config.TIMEFRAME, 
+                  timeframe: str = Config.DEFAULT_TIMEFRAME, 
                   limit: int = 100) -> Optional[pd.DataFrame]:
         """Get OHLCV data."""
         try:

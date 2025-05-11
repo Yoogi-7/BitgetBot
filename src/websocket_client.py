@@ -1,9 +1,9 @@
 # src/websocket_client.py
 import asyncio
-import websockets
 import json
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
+from datetime import datetime, timedelta
 from config.settings import Config
 import ccxt.async_support as ccxt_async
 
@@ -50,6 +50,8 @@ class WebSocketClient:
         ws_url = self.exchange.urls['api']['ws']
         
         try:
+            # Note: websockets would be installed as a dependency
+            import websockets
             self.ws = await websockets.connect(ws_url)
             self.running = True
             self.logger.info("WebSocket connected")
@@ -63,6 +65,9 @@ class WebSocketClient:
                 self._process_signals()
             )
             
+        except ImportError:
+            self.logger.error("websockets library not installed. Please install with: pip install websockets")
+            self.running = False
         except Exception as e:
             self.logger.error(f"WebSocket connection error: {e}")
             self.running = False

@@ -1,328 +1,290 @@
 # src/strategy.py
 import pandas as pd
 import numpy as np
+import ta
 from typing import Dict, List
 from datetime import datetime
 from config.settings import Config
-from src.indicators import TechnicalIndicators
-from src.sentiment_analyzer import EnhancedSentimentAnalyzer
 
 
-class EnhancedTradingStrategy:
-    """Enhanced trading strategy with comprehensive indicators and patterns."""
+class TradingStrategy:
+    """Enhanced trading strategy with all RSI periods and session times."""
     
     def __init__(self):
-        self.indicators_calculator = TechnicalIndicators()
-        self.sentiment_analyzer = EnhancedSentimentAnalyzer()
-        self.signal_confirmations = {}
+        self.indicators = {}
     
-    def generate_signal(self, market_data: Dict, positions: List[Dict]) -> Dict:
-        """Generate trading signal based on comprehensive data."""
+    def generate_signal(self, market_data: Dict, analysis: Dict, positions: List[Dict]) -> Dict:
+        """Generate trading signal based on market data and analysis."""
+        df = market_data['ohlcv']
+        
+        # Calculate all indicators
+        self._calculate_indicators(df)
+        
+        # Add session and time features
+        self._add_session_features(df)
+        
+        # Initialize signal
         signal = {
             'action': None,
             'side': None,
             'reason': '',
-            'entry_price': 0,
+            'entry_price': df['close'].iloc[-1],
             'stop_loss': None,
             'take_profit': None,
             'confidence': 0.0,
-            'confirmations': [],
-            'timeframe': Config.DEFAULT_TIMEFRAME
+            'indicators': self.indicators
         }
         
-        # Skip if max positions reached
-        if len(positions) >= Config.MAX_OPEN_POSITIONS:
-            return signal
-        
-        # Get primary timeframe data
-        primary_tf = market_data['timeframes'].get(Config.DEFAULT_TIMEFRAME)
-        if not primary_tf:
-            return signal
-        
-        indicators = primary_tf['indicators']
-        current_price = primary_tf['ohlcv']['close'].iloc[-1]
-        signal['entry_price'] = current_price
-        
         # Check for exit signals first
-        exit_signal = self._check_exit_conditions(positions, market_data)
+        exit_signal = self._check_exit_conditions(positions, df, analysis)
         if exit_signal:
             return exit_signal
         
-        # Analyze multi-timeframe confluence
-        mtf_analysis = self._analyze_multi_timeframe(market_data)
-        
-        # Get sentiment analysis
-        sentiment = self.sentiment_analyzer.get_comprehensive_sentiment()
-        
-        # Check for entry conditions
-        entry_signal = self._check_entry_conditions(
-            indicators, 
-            market_data, 
-            mtf_analysis, 
-            sentiment,
-            positions
-        )
-        
+        # Check for entry signals
+        entry_signal = self._check_entry_conditions(df, analysis, positions)
         if entry_signal:
             return entry_signal
         
         return signal
     
-    def _check_entry_conditions(self, indicators: Dict, market_data: Dict, 
-                              mtf_analysis: Dict, sentiment: Dict, 
-                              positions: List[Dict]) -> Dict:
-        """Check for entry conditions with multiple confirmations."""
-        confirmations = []
-        long_score = 0
-        short_score = 0
+    def _calculate_indicators(self, df: pd.DataFrame):
+        """Calculate all technical indicators."""
+        # Calculate RSI for all specified periods
+        for period in Config.RSI_PERIODS:
+            self.indicators[f'rsi_{period}'] = ta.momentum.RSIIndicator(
+                close=df['close'], 
+                window=period
+            ).rsi().iloc[-1]
         
-        # 1. Check RSI conditions
-        rsi_signal = self._check_rsi_signal(indicators)
-        if rsi_signal:
-            confirmations.append(rsi_signal)
-            if rsi_signal['direction'] == 'bullish':
-                long_score += rsi_signal['strength']
-            else:
-                short_score += rsi_signal['strength']
+        # EMA trend
+        ema_fast = df['close'].ewm(span=Config.EMA_FAST).mean()
+        ema_slow = df['close'].ewm(span=Config.EMA_SLOW).mean()
         
-        # 2. Check EMA crossover
-        ema_signal = self._check_ema_crossover(indicators)
-        if ema_signal:
-            confirmations.append(ema_signal)
-            if ema_signal['direction'] == 'bullish':
-                long_score += ema_signal['strength']
-            else:
-                short_score += ema_signal['strength']
+        self.indicators['ema_fast'] = ema_fast.iloc[-1]
+        self.indicators['ema_slow'] = ema_slow.iloc[-1]
         
-        # 3. Check Bollinger Bands
-        bb_signal = self._check_bollinger_bands(indicators)
-        if bb_signal:
-            confirmations.append(bb_signal)
-            if bb_signal['direction'] == 'bullish':
-                long_score += bb_signal['strength']
-            else:
-                short_score += bb_signal['strength']
-        
-        # 4. Check MACD
-        macd_signal = self._check_macd(indicators)
-        if macd_signal:
-            confirmations.append(macd_signal)
-            if macd_signal['direction'] == 'bullish':
-                long_score += macd_signal['strength']
-            else:
-                short_score += macd_signal['strength']
-        
-        # 5. Check candlestick patterns
-        pattern_signal = self._check_patterns(indicators)
-        if pattern_signal:
-            confirmations.append(pattern_signal)
-            if pattern_signal['direction'] == 'bullish':
-                long_score += pattern_signal['strength']
-            else:
-                short_score += pattern_signal['strength']
-        
-        # 6. Check order book imbalance
-        orderbook_signal = self._check_order_book(market_data)
-        if orderbook_signal:
-            confirmations.append(orderbook_signal)
-            if orderbook_signal['direction'] == 'bullish':
-                long_score += orderbook_signal['strength']
-            else:
-                short_score += orderbook_signal['strength']
-        
-        # 7. Check volume
-        volume_signal = self._check_volume(indicators)
-        if volume_signal:
-            confirmations.append(volume_signal)
-            # Volume adds to both directions as confirmation
-            long_score += volume_signal['strength'] * 0.5
-            short_score += volume_signal['strength'] * 0.5
-        
-        # 8. Check multi-timeframe alignment
-        if mtf_analysis['aligned']:
-            mtf_signal = {
-                'type': 'mtf_alignment',
-                'direction': mtf_analysis['direction'],
-                'strength': 0.2,
-                'description': f"Multi-timeframe {mtf_analysis['direction']} alignment"
-            }
-            confirmations.append(mtf_signal)
-            if mtf_signal['direction'] == 'bullish':
-                long_score += mtf_signal['strength']
-            else:
-                short_score += mtf_signal['strength']
-        
-        # 9. Check sentiment
-        if sentiment['overall_sentiment'] != 'neutral':
-            sentiment_signal = {
-                'type': 'sentiment',
-                'direction': sentiment['overall_sentiment'],
-                'strength': 0.15,
-                'description': f"Market sentiment {sentiment['overall_sentiment']}"
-            }
-            confirmations.append(sentiment_signal)
-            if sentiment_signal['direction'] == 'bullish':
-                long_score += sentiment_signal['strength']
-            else:
-                short_score += sentiment_signal['strength']
-        
-        # 10. Check funding and OI
-        funding_signal = self._check_funding_oi(market_data)
-        if funding_signal:
-            confirmations.append(funding_signal)
-            if funding_signal['direction'] == 'bullish':
-                long_score += funding_signal['strength']
-            else:
-                short_score += funding_signal['strength']
-        
-        # Generate signal if enough confirmations
-        min_confirmations = 3
-        min_score = 0.6
-        
-        if len(confirmations) >= min_confirmations:
-            if long_score > min_score and long_score > short_score:
-                return self._create_entry_signal('long', long_score, confirmations, market_data)
-            elif short_score > min_score and short_score > long_score:
-                return self._create_entry_signal('short', short_score, confirmations, market_data)
-        
-        return None
-    
-    def _check_rsi_signal(self, indicators: Dict) -> Dict:
-        """Check RSI for signals."""
-        rsi = indicators.get('rsi_14', 50)
-        
-        if rsi < Config.RSI_EXTREME_OVERSOLD:
-            return {
-                'type': 'rsi',
-                'direction': 'bullish',
-                'strength': 0.3,
-                'description': f'RSI extreme oversold ({rsi:.1f})'
-            }
-        elif rsi < Config.RSI_OVERSOLD:
-            return {
-                'type': 'rsi',
-                'direction': 'bullish',
-                'strength': 0.2,
-                'description': f'RSI oversold ({rsi:.1f})'
-            }
-        elif rsi > Config.RSI_EXTREME_OVERBOUGHT:
-            return {
-                'type': 'rsi',
-                'direction': 'bearish',
-                'strength': 0.3,
-                'description': f'RSI extreme overbought ({rsi:.1f})'
-            }
-        elif rsi > Config.RSI_OVERBOUGHT:
-            return {
-                'type': 'rsi',
-                'direction': 'bearish',
-                'strength': 0.2,
-                'description': f'RSI overbought ({rsi:.1f})'
-            }
-        
-        return None
-    
-    def _check_ema_crossover(self, indicators: Dict) -> Dict:
-        """Check EMA crossover signals."""
-        crossover = indicators.get('ema_crossover')
-        
-        if crossover == 'bullish':
-            return {
-                'type': 'ema_crossover',
-                'direction': 'bullish',
-                'strength': 0.25,
-                'description': 'EMA 9/21 bullish crossover'
-            }
-        elif crossover == 'bearish':
-            return {
-                'type': 'ema_crossover',
-                'direction': 'bearish',
-                'strength': 0.25,
-                'description': 'EMA 9/21 bearish crossover'
-            }
-        
-        return None
-    
-    def _check_bollinger_bands(self, indicators: Dict) -> Dict:
-        """Check Bollinger Bands signals."""
-        bb_squeeze = indicators.get('bb_squeeze')
-        bb_position = indicators.get('bb_position')
-        
-        if bb_squeeze and indicators.get('bb_squeeze_direction'):
-            return {
-                'type': 'bb_squeeze',
-                'direction': indicators['bb_squeeze_direction'],
-                'strength': 0.3,
-                'description': f'Bollinger Band squeeze {indicators["bb_squeeze_direction"]}'
-            }
-        elif bb_position == 'below':
-            return {
-                'type': 'bb_position',
-                'direction': 'bullish',
-                'strength': 0.2,
-                'description': 'Price below lower Bollinger Band'
-            }
-        elif bb_position == 'above':
-            return {
-                'type': 'bb_position',
-                'direction': 'bearish',
-                'strength': 0.2,
-                'description': 'Price above upper Bollinger Band'
-            }
-        
-        return None
-    
-    def _check_macd(self, indicators: Dict) -> Dict:
-        """Check MACD signals."""
-        macd = indicators.get('macd', 0)
-        macd_signal = indicators.get('macd_signal', 0)
-        macd_divergence = indicators.get('macd_divergence')
-        
-        # Check for crossover
-        if macd > macd_signal and indicators.get('macd_histogram', 0) > 0:
-            signal = {
-                'type': 'macd_crossover',
-                'direction': 'bullish',
-                'strength': 0.2,
-                'description': 'MACD bullish crossover'
-            }
-        elif macd < macd_signal and indicators.get('macd_histogram', 0) < 0:
-            signal = {
-                'type': 'macd_crossover',
-                'direction': 'bearish',
-                'strength': 0.2,
-                'description': 'MACD bearish crossover'
-            }
+        # Trend direction
+        if ema_fast.iloc[-1] > ema_slow.iloc[-1]:
+            self.indicators['trend'] = 'bullish'
+        elif ema_fast.iloc[-1] < ema_slow.iloc[-1]:
+            self.indicators['trend'] = 'bearish'
         else:
-            signal = None
+            self.indicators['trend'] = 'neutral'
         
-        # Check for divergence (stronger signal)
-        if macd_divergence == 'bullish':
-            return {
-                'type': 'macd_divergence',
-                'direction': 'bullish',
-                'strength': 0.35,
-                'description': 'MACD bullish divergence'
-            }
-        elif macd_divergence == 'bearish':
-            return {
-                'type': 'macd_divergence',
-                'direction': 'bearish',
-                'strength': 0.35,
-                'description': 'MACD bearish divergence'
-            }
+        # VWAP
+        vwap = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+        self.indicators['vwap'] = vwap.iloc[-1]
         
-        return signal
+        # ATR for different periods
+        self.indicators['atr'] = ta.volatility.AverageTrueRange(
+            high=df['high'], low=df['low'], close=df['close'], 
+            window=Config.ATR_PERIOD
+        ).average_true_range().iloc[-1]
+        
+        self.indicators['atr_short'] = ta.volatility.AverageTrueRange(
+            high=df['high'], low=df['low'], close=df['close'], 
+            window=Config.ATR_PERIOD_SHORT
+        ).average_true_range().iloc[-1]
+        
+        # Volume analysis
+        volume_sma = df['volume'].rolling(window=20).mean()
+        self.indicators['volume_ratio'] = df['volume'].iloc[-1] / volume_sma.iloc[-1]
+        self.indicators['volume_spike'] = self.indicators['volume_ratio'] > Config.VOLUME_SPIKE_THRESHOLD
+        
+        # Volume spike detection (500% in 1 minute)
+        if len(df) > 1:
+            volume_change = df['volume'].iloc[-1] / df['volume'].iloc[-2]
+            self.indicators['volume_spike_500'] = volume_change > 5.0
+        else:
+            self.indicators['volume_spike_500'] = False
+        
+        # Price action
+        self.indicators['price_change'] = (df['close'].iloc[-1] - df['close'].iloc[-2]) / df['close'].iloc[-2] * 100
     
-    def _check_patterns(self, indicators: Dict) -> Dict:
-        """Check candlestick patterns."""
-        # Check engulfing pattern
-        if indicators.get('pattern_engulfing') == 'bullish':
-            return {
-                'type': 'pattern',
-                'direction': 'bullish',
-                'strength': 0.3,
-                'description': 'Bullish engulfing pattern'
-            }
-        elif indicators.get('pattern_engulfing') == 'bearish':
-            return {
+    def _add_session_features(self, df: pd.DataFrame):
+        """Add trading session features."""
+        # Get current hour in UTC
+        current_time = datetime.utcnow()
+        hour_utc = current_time.hour
+        
+        # Check sessions
+        self.indicators['session_asia'] = Config.ASIAN_SESSION[0] <= hour_utc < Config.ASIAN_SESSION[1]
+        self.indicators['session_europe'] = Config.EUROPEAN_SESSION[0] <= hour_utc < Config.EUROPEAN_SESSION[1]
+        self.indicators['session_us'] = Config.US_SESSION[0] <= hour_utc < Config.US_SESSION[1]
+        
+        # Check high liquidity hours
+        self.indicators['high_liquidity'] = Config.HIGH_LIQUIDITY_HOURS[0] <= hour_utc < Config.HIGH_LIQUIDITY_HOURS[1]
+        
+        # Session overlaps
+        self.indicators['session_overlap'] = (
+            (self.indicators['session_europe'] and self.indicators['session_us']) or
+            (self.indicators['session_asia'] and self.indicators['session_europe'])
+        )
+        
+        # Current session name
+        if self.indicators['session_asia']:
+            self.indicators['current_session'] = 'Asia'
+        elif self.indicators['session_europe']:
+            self.indicators['current_session'] = 'Europe'
+        elif self.indicators['session_us']:
+            self.indicators['current_session'] = 'US'
+        else:
+            self.indicators['current_session'] = 'Other'
+    
+    def _check_entry_conditions(self, df: pd.DataFrame, analysis: Dict, positions: List[Dict]) -> Dict:
+        """Check for entry conditions with enhanced scalping logic."""
+        # Skip if max positions reached
+        if len(positions) >= Config.MAX_OPEN_POSITIONS:
+            return None
+        
+        last = df.iloc[-1]
+        prev = df.iloc[-2]
+        
+        # Long conditions
+        long_score = 0.0
+        long_reasons = []
+        
+        # Check RSI oversold conditions on multiple timeframes
+        rsi_5 = self.indicators.get('rsi_5', 50)
+        rsi_7 = self.indicators.get('rsi_7', 50)
+        
+        if rsi_5 < 25 or rsi_7 < 27:
+            long_score += 0.3
+            long_reasons.append(f'RSI oversold (5:{rsi_5:.1f}, 7:{rsi_7:.1f})')
+        
+        # Price bounce from VWAP
+        if last['close'] < self.indicators['vwap'] and last['close'] > prev['close']:
+            long_score += 0.25
+            long_reasons.append('VWAP bounce')
+        
+        # Volume spike with price increase
+        if self.indicators.get('volume_spike_500', False) and self.indicators['price_change'] > 0:
+            long_score += 0.35
+            long_reasons.append('Volume spike 500% buy')
+        
+        # High liquidity hours bonus
+        if self.indicators.get('high_liquidity', False):
+            long_score += 0.1
+            long_reasons.append('High liquidity hours')
+        
+        # Order book imbalance (buy pressure)
+        if analysis.get('order_book_imbalance', 0) > Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
+            long_score += 0.3
+            long_reasons.append('Buy pressure')
+        
+        # Short conditions
+        short_score = 0.0
+        short_reasons = []
+        
+        # Check RSI overbought conditions
+        if rsi_5 > 75 or rsi_7 > 73:
+            short_score += 0.3
+            short_reasons.append(f'RSI overbought (5:{rsi_5:.1f}, 7:{rsi_7:.1f})')
+        
+        # Price rejection from VWAP
+        if last['close'] > self.indicators['vwap'] and last['close'] < prev['close']:
+            short_score += 0.25
+            short_reasons.append('VWAP rejection')
+        
+        # Volume spike with price decrease
+        if self.indicators.get('volume_spike_500', False) and self.indicators['price_change'] < 0:
+            short_score += 0.35
+            short_reasons.append('Volume spike 500% sell')
+        
+        # High liquidity hours bonus
+        if self.indicators.get('high_liquidity', False):
+            short_score += 0.1
+            short_reasons.append('High liquidity hours')
+        
+        # Order book imbalance (sell pressure)
+        if analysis.get('order_book_imbalance', 0) < -Config.ORDER_BOOK_IMBALANCE_THRESHOLD:
+            short_score += 0.3
+            short_reasons.append('Sell pressure')
+        
+        # Generate signal
+        if long_score >= 0.7 and self.indicators['trend'] != 'bearish':
+            return self._create_entry_signal('long', long_score, long_reasons, last, analysis)
+        elif short_score >= 0.7 and self.indicators['trend'] != 'bullish':
+            return self._create_entry_signal('short', short_score, short_reasons, last, analysis)
+        
+        return None
+    
+    def _check_exit_conditions(self, positions: List[Dict], df: pd.DataFrame, analysis: Dict) -> Dict:
+        """Check for exit conditions."""
+        if not positions:
+            return None
+        
+        for position in positions:
+            exit_conditions = []
+            
+            if position['side'] == 'long':
+                # RSI extreme overbought
+                if self.indicators.get('rsi_5', 50) > 70:
+                    exit_conditions.append('RSI_5 overbought')
+                
+                # Price above VWAP target
+                if df['close'].iloc[-1] > self.indicators['vwap'] * 1.005:
+                    exit_conditions.append('VWAP target reached')
+                
+                # Volume exhaustion
+                if self.indicators.get('volume_spike_500', False) and df['volume'].iloc[-1] < df['volume'].iloc[-2]:
+                    exit_conditions.append('Volume exhaustion')
+            
+            elif position['side'] == 'short':
+                # RSI extreme oversold
+                if self.indicators.get('rsi_5', 50) < 30:
+                    exit_conditions.append('RSI_5 oversold')
+                
+                # Price below VWAP target
+                if df['close'].iloc[-1] < self.indicators['vwap'] * 0.995:
+                    exit_conditions.append('VWAP target reached')
+                
+                # Volume exhaustion
+                if self.indicators.get('volume_spike_500', False) and df['volume'].iloc[-1] < df['volume'].iloc[-2]:
+                    exit_conditions.append('Volume exhaustion')
+            
+            if exit_conditions:
+                return {
+                    'action': 'CLOSE',
+                    'side': position['side'],
+                    'reason': 'Exit: ' + ', '.join(exit_conditions),
+                    'entry_price': df['close'].iloc[-1],
+                    'confidence': 0.9,
+                    'indicators': self.indicators
+                }
+        
+        return None
+    
+    def _create_entry_signal(self, side: str, confidence: float, reasons: List[str], 
+                           last: pd.Series, analysis: Dict) -> Dict:
+        """Create entry signal with proper risk management."""
+        # Get spread from analysis
+        spread = analysis.get('spread', 0.001)  # Default 0.1% if not available
+        
+        # Use short-term ATR for stops
+        atr = self.indicators.get('atr_short', self.indicators.get('atr', last['close'] * 0.02))
+        
+        # Calculate stop loss based on spread and ATR
+        spread_based_stop = spread * Config.SPREAD_MULTIPLIER
+        atr_based_stop = atr * 1.5
+        stop_distance = max(spread_based_stop, atr_based_stop)
+        
+        if side == 'long':
+            stop_loss = last['close'] * (1 - stop_distance)
+            take_profit = last['close'] * (1 + (stop_distance * 2))
+        else:
+            stop_loss = last['close'] * (1 + stop_distance)
+            take_profit = last['close'] * (1 - (stop_distance * 2))
+        
+        return {
+            'action': 'OPEN',
+            'side': side,
+            'reason': f"Scalp {side}: {', '.join(reasons)}",
+            'entry_price': last['close'],
+            'stop_loss': stop_loss,
+            'take_profit': take_profit,
+            'confidence': confidence,
+            'indicators': self.indicators,
+            'atr': atr,
+            'spread': spread
+        }

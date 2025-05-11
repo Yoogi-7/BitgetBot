@@ -5,6 +5,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from config.settings import Config
 from src.exchange import ExchangeConnector
+from src.data_collector import EnhancedDataCollector
 from src.strategy import TradingStrategy
 from src.market_analyzer import MarketAnalyzer
 from src.logger import TradeLogger
@@ -22,6 +23,7 @@ class TradingBot:
         
         # Initialize components
         self.exchange = ExchangeConnector()
+        self.data_collector = EnhancedDataCollector()
         self.strategy = TradingStrategy()
         self.market_analyzer = MarketAnalyzer()
         self.trade_logger = TradeLogger()
@@ -156,7 +158,7 @@ class TradingBot:
         """Fetch comprehensive market data."""
         try:
             # Get OHLCV data
-            ohlcv = self.exchange.get_ohlcv(timeframe=Config.TIMEFRAME, limit=100)
+            ohlcv = self.exchange.get_ohlcv(timeframe=Config.DEFAULT_TIMEFRAME, limit=100)
             
             if ohlcv is None or ohlcv.empty:
                 return None

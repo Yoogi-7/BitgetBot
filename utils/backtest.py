@@ -36,7 +36,7 @@ class BacktestEngine:
         self.peak_balance = self.initial_balance
         self.max_drawdown = 0
     
-    def run_backtest(self, days: int = 30, timeframe: str = '1m', 
+    def run_backtest(self, days: int = 30, timeframe: str = Config.DEFAULT_TIMEFRAME, 
                      flash_crash_dates: List[str] = None) -> Dict:
         """Run backtest with optional flash crash simulation."""
         print(f"Starting backtest for {days} days...")
