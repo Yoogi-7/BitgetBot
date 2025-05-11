@@ -1,104 +1,80 @@
 # main.py
-import logging
-import sys
-from datetime import datetime
 import os
-from src.trading_bot import EnhancedBitgetTradingBot
+import sys
+import signal
+import logging
+from datetime import datetime
+from src.bot import TradingBot
+from config.settings import Config
+
 
 def setup_logging():
-    """Konfiguruje system logowania"""
-    # Stwórz folder logs jeśli nie istnieje
+    """Configure logging system."""
+    # Create logs directory if it doesn't exist
     if not os.path.exists('logs'):
         os.makedirs('logs')
     
-    # Nazwa pliku z datą
-    log_filename = f'logs/enhanced_bot_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_filename = f'logs/bot_{timestamp}.log'
     
-    # Konfiguracja logowania
     logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        level=getattr(logging, Config.LOG_LEVEL),
+        format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',
         handlers=[
             logging.FileHandler(log_filename),
-            logging.StreamHandler(sys.stdout)  # Wyświetla też w konsoli
+            logging.StreamHandler(sys.stdout)
         ]
     )
     
-    # Ustaw poziom dla ccxt na WARNING żeby zmniejszyć spam
+    # Reduce noise from external libraries
     logging.getLogger('ccxt').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
 
-def print_banner():
-    """Wyświetla banner startowy"""
-    banner = """
-    ========================================
-    🚀 Enhanced Bitget Futures Trading Bot 🚀
-    ========================================
-    
-    Features:
-    ✓ Scalping optimized (RSI 5-10)
-    ✓ Order book analysis (L2 depth)
-    ✓ Volume spike detection
-    ✓ VWAP trading
-    ✓ Session-based trading
-    ✓ Advanced risk management
-    
-    Press Ctrl+C to stop
-    Check logs/ folder for detailed logs
-    """
-    print(banner)
+
+def signal_handler(signum, frame):
+    """Handle shutdown signals gracefully."""
+    print("\n\nShutting down bot...")
+    sys.exit(0)
+
 
 def main():
-    """Główna funkcja aplikacji"""
-    try:
-        # Konfiguruj logowanie
-        setup_logging()
-        logger = logging.getLogger(__name__)
-        
-        # Wyświetl banner
-        print_banner()
-        
-        # Sprawdź czy mamy API keys
-        from config.settings import Config
-        
-        if not Config.BITGET_API_KEY or not Config.BITGET_API_SECRET:
-            logger.error("API keys not found! Please check your .env file")
-            sys.exit(1)
-        
-        # Sprawdź opcjonalne API keys
-        if not Config.TWITTER_BEARER_TOKEN:
-            logger.warning("Twitter API not configured - sentiment analysis will be limited")
-        
-        if not Config.CRYPTOPANIC_API_KEY:
-            logger.warning("CryptoPanic API not configured - news sentiment will be limited")
-        
-        # Ostrzeżenie dla mainnet
-        if not Config.USE_TESTNET:
-            response = input("WARNING: Bot is configured for MAINNET. Are you sure? (yes/no): ")
-            if response.lower() != 'yes':
-                logger.info("Exiting...")
-                sys.exit(0)
-        
-        # Informacja o trybie
-        if Config.PAPER_TRADING:
-            logger.info("Running in PAPER TRADING mode - all trades are simulated")
-        else:
-            logger.warning("Running in LIVE TRADING mode - real money will be used!")
-        
-        if Config.SCALPING_ENABLED:
-            logger.info("Scalping mode is ENABLED")
-            logger.info(f"Min profit: {Config.SCALPING_MIN_PROFIT_PERCENT}%")
-            logger.info(f"Max hold time: {Config.SCALPING_MAX_HOLD_TIME} seconds")
-        
-        # Uruchom bota
-        bot = EnhancedBitgetTradingBot()
-        bot.start()
-        
-    except KeyboardInterrupt:
-        logger.info("Bot stopped by user")
-        sys.exit(0)
-    except Exception as e:
-        logger.error(f"Fatal error: {e}")
+    """Main entry point."""
+    # Setup signal handlers for graceful shutdown
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
+    
+    # Setup logging
+    setup_logging()
+    logger = logging.getLogger(__name__)
+    
+    # Print startup banner
+    logger.info("=" * 50)
+    logger.info("    Bitget Futures Trading Bot")
+    logger.info("=" * 50)
+    logger.info(f"Mode: {'PAPER TRADING' if Config.PAPER_TRADING else 'LIVE TRADING'}")
+    logger.info(f"Symbol: {Config.TRADING_SYMBOL}")
+    logger.info(f"Leverage: {Config.LEVERAGE}x")
+    
+    # Check API keys
+    if not all([Config.BITGET_API_KEY, Config.BITGET_API_SECRET, Config.BITGET_PASSPHRASE]):
+        logger.error("Missing API credentials. Please check your .env file.")
         sys.exit(1)
+    
+    # Confirm live trading if enabled
+    if not Config.PAPER_TRADING:
+        response = input("WARNING: Live trading enabled. Continue? (yes/no): ")
+        if response.lower() != 'yes':
+            logger.info("Exiting...")
+            sys.exit(0)
+    
+    try:
+        # Initialize and run bot
+        bot = TradingBot()
+        bot.run()
+    except Exception as e:
+        logger.error(f"Fatal error: {e}", exc_info=True)
+        sys.exit(1)
+
 
 if __name__ == "__main__":
     main()
