@@ -7,7 +7,7 @@ from config.settings import Config
 
 
 class ExchangeConnector:
-    """Simplified exchange connection handler."""
+    """Enhanced exchange connection with high-frequency data support."""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -32,6 +32,10 @@ class ExchangeConnector:
             self.exchange.load_markets()
             ticker = self.exchange.fetch_ticker(Config.TRADING_SYMBOL)
             self.logger.info(f"Connected to Bitget. BTC Price: {ticker['last']}")
+            
+            # Check available timeframes
+            self.logger.info(f"Available timeframes: {self.exchange.timeframes}")
+            
         except Exception as e:
             self.logger.error(f"Failed to connect to exchange: {e}")
             raise
@@ -94,11 +98,24 @@ class ExchangeConnector:
     def get_ohlcv(self, symbol: str = Config.TRADING_SYMBOL, 
                   timeframe: str = Config.TIMEFRAME, 
                   limit: int = 100) -> Optional[pd.DataFrame]:
-        """Get OHLCV data."""
+        """Get OHLCV data with support for high-frequency timeframes."""
         try:
+            # Check if timeframe is supported
+            if timeframe not in self.exchange.timeframes:
+                # Fallback for unsupported timeframes
+                if timeframe == '15s':
+                    self.logger.warning(f"Timeframe {timeframe} not supported, using 1m")
+                    timeframe = '1m'
+                    limit = min(limit, 20)  # Reduce limit for higher frequency
+            
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
+            
+            # Add derived features for high-frequency analysis
+            df['price_change'] = df['close'].pct_change()
+            df['volume_change'] = df['volume'].pct_change()
+            
             return df
         except Exception as e:
             self.logger.error(f"Error fetching OHLCV: {e}")
@@ -112,7 +129,8 @@ class ExchangeConnector:
                 'last': float(ticker['last']),
                 'bid': float(ticker['bid']),
                 'ask': float(ticker['ask']),
-                'volume': float(ticker.get('baseVolume', 0))
+                'volume': float(ticker.get('baseVolume', 0)),
+                'spread': (float(ticker['ask']) - float(ticker['bid'])) / float(ticker['bid'])
             }
         except Exception as e:
             self.logger.error(f"Error fetching ticker: {e}")
@@ -120,12 +138,16 @@ class ExchangeConnector:
     
     def get_order_book(self, symbol: str = Config.TRADING_SYMBOL, 
                        limit: int = Config.ORDER_BOOK_DEPTH) -> Optional[Dict]:
-        """Get order book data."""
+        """Get order book data with L2 depth."""
         try:
             orderbook = self.exchange.fetch_order_book(symbol, limit)
+            
+            # Process order book for L2 data
             return {
-                'bids': orderbook['bids'][:limit],
-                'asks': orderbook['asks'][:limit],
+                'bids': orderbook['bids'][:Config.ORDER_BOOK_LEVELS],
+                'asks': orderbook['asks'][:Config.ORDER_BOOK_LEVELS],
+                'full_bids': orderbook['bids'][:limit],
+                'full_asks': orderbook['asks'][:limit],
                 'timestamp': orderbook['timestamp']
             }
         except Exception as e:
@@ -133,17 +155,24 @@ class ExchangeConnector:
             return None
     
     def get_recent_trades(self, symbol: str = Config.TRADING_SYMBOL, 
-                          limit: int = 50) -> List[Dict]:
-        """Get recent trades."""
+                          limit: int = 100) -> List[Dict]:
+        """Get recent trades with enhanced data."""
         try:
             trades = self.exchange.fetch_trades(symbol, limit=limit)
-            return [{
-                'id': trade.get('id'),
-                'timestamp': trade.get('timestamp'),
-                'side': trade.get('side'),
-                'price': float(trade.get('price', 0)),
-                'amount': float(trade.get('amount', 0))
-            } for trade in trades]
+            
+            processed_trades = []
+            for trade in trades:
+                processed_trades.append({
+                    'id': trade.get('id'),
+                    'timestamp': trade.get('timestamp'),
+                    'datetime': trade.get('datetime'),
+                    'side': trade.get('side'),
+                    'price': float(trade.get('price', 0)),
+                    'amount': float(trade.get('amount', 0)),
+                    'cost': float(trade.get('cost', 0))
+                })
+            
+            return processed_trades
         except Exception as e:
             self.logger.error(f"Error fetching recent trades: {e}")
             return []
@@ -152,19 +181,27 @@ class ExchangeConnector:
                     order_type: str = 'market', 
                     price: float = None, 
                     reduce_only: bool = False) -> Optional[Dict]:
-        """Place an order."""
+        """Place an order with enhanced error handling."""
         try:
             if Config.PAPER_TRADING:
-                # Simulate order execution
+                # Simulate order execution with slippage
                 ticker = self.get_ticker()
                 simulated_price = ticker['last'] if ticker else 0
+                
+                # Add simulated slippage
+                if side == 'buy':
+                    simulated_price *= 1.0001  # 0.01% slippage
+                else:
+                    simulated_price *= 0.9999
                 
                 return {
                     'id': f"paper_{pd.Timestamp.now().timestamp()}",
                     'status': 'closed',
                     'price': simulated_price,
                     'amount': amount,
-                    'side': side
+                    'side': side,
+                    'filled': amount,
+                    'remaining': 0
                 }
             
             params = {'reduceOnly': reduce_only}
