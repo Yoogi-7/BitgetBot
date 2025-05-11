@@ -108,9 +108,6 @@ class MultiSymbolTradingBot:
         # Check daily drawdown limit
         current_balance = self._get_available_balance()
         if not self.kpi_tracker.check_daily_drawdown(current_balance, self.daily_starting_balance):
-        # Check daily drawdown limit
-        current_balance = self._get_available_balance()
-        if not self.kpi_tracker.check_daily_drawdown(current_balance, self.daily_starting_balance):
             self.logger.warning("Daily drawdown limit reached - pausing trading")
             return
         

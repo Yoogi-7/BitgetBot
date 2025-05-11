@@ -39,12 +39,10 @@ def signal_handler(signum, frame):
 
 
 def main():
-if MULTI_SYMBOL_MODE:
-    bot = MultiSymbolTradingBot()
-else:
-    bot = TradingBot()
-
     """Main entry point."""
+    # Określ tryb pracy
+    MULTI_SYMBOL_MODE = True  # Zmień na False dla pojedynczego symbolu
+    
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
@@ -58,7 +56,12 @@ else:
     logger.info("    Bitget Futures Trading Bot")
     logger.info("=" * 50)
     logger.info(f"Mode: {'PAPER TRADING' if Config.PAPER_TRADING else 'LIVE TRADING'}")
-    logger.info(f"Symbol: {Config.TRADING_SYMBOL}")
+    
+    if MULTI_SYMBOL_MODE:
+        logger.info(f"Symbols: {', '.join(Config.TRADING_SYMBOLS)}")
+    else:
+        logger.info(f"Symbol: {Config.TRADING_SYMBOL}")
+    
     logger.info(f"Leverage: {Config.LEVERAGE}x")
     
     # Check API keys
@@ -75,7 +78,11 @@ else:
     
     try:
         # Initialize and run bot
-        bot = TradingBot()
+        if MULTI_SYMBOL_MODE:
+            bot = MultiSymbolTradingBot()
+        else:
+            bot = TradingBot()
+        
         bot.run()
     except Exception as e:
         logger.error(f"Fatal error: {e}", exc_info=True)
