@@ -62,7 +62,7 @@ class EnhancedDataCollector:
             data['order_book'] = self.get_order_book(symbol)
             data['recent_trades'] = self.get_recent_trades(symbol)
             
-            # Get derivatives data
+            # Get derivatives data (with better error handling)
             data['funding_rate'] = self.get_funding_rate(symbol)
             data['open_interest'] = self.get_open_interest(symbol)
             
@@ -153,49 +153,60 @@ class EnhancedDataCollector:
             return []
     
     def get_funding_rate(self, symbol: str) -> Optional[Dict]:
-        """Get funding rate information."""
+        """Get funding rate information with improved error handling."""
         try:
-            # This is exchange-specific, adjust for Bitget
+            # Check if the exchange supports funding rate
+            if not hasattr(self.exchange, 'fetch_funding_rate'):
+                return None
+            
             funding = self.exchange.fetch_funding_rate(symbol)
             
+            # Safely extract values with defaults
+            current_rate = funding.get('fundingRate')
+            next_rate = funding.get('nextFundingRate')
+            
             return {
-                'current': float(funding.get('fundingRate', 0)),
-                'next': float(funding.get('nextFundingRate', 0)),
+                'current': float(current_rate) if current_rate is not None else 0.0,
+                'next': float(next_rate) if next_rate is not None else 0.0,
                 'timestamp': funding.get('timestamp'),
                 'funding_timestamp': funding.get('fundingTimestamp')
             }
+        except ccxt.NotSupported:
+            # This is expected for some exchanges/endpoints
+            self.logger.debug(f"Funding rate not supported for {symbol}")
+            return None
         except Exception as e:
-            self.logger.error(f"Error fetching funding rate: {e}")
-            # Fallback to manual API call if needed
-            try:
-                # Alternative method for Bitget
-                url = f"{self.exchange.urls['api']['public']}/market/funding_rate"
-                response = self.exchange.fetch(url, params={'symbol': symbol})
-                if response and 'data' in response:
-                    data = response['data']
-                    return {
-                        'current': float(data.get('fundingRate', 0)),
-                        'next': float(data.get('nextFundingRate', 0)),
-                        'timestamp': pd.Timestamp.now()
-                    }
-            except:
-                pass
-            
+            # Only log unexpected errors
+            if 'not supported' not in str(e).lower():
+                self.logger.warning(f"Error fetching funding rate for {symbol}: {e}")
             return None
     
     def get_open_interest(self, symbol: str) -> Optional[Dict]:
-        """Get open interest data."""
+        """Get open interest data with improved error handling."""
         try:
-            # Get open interest data
+            # Check if the exchange supports open interest
+            if not hasattr(self.exchange, 'fetch_open_interest'):
+                return None
+            
+            # Get current open interest
             oi_data = self.exchange.fetch_open_interest(symbol)
             
-            # Calculate 24h change if historical data available
-            oi_history = self.exchange.fetch_open_interest_history(symbol, limit=24)
+            # Safely extract open interest value
+            oi_value = oi_data.get('openInterest') if oi_data else None
+            current_oi = float(oi_value) if oi_value is not None else 0.0
             
-            current_oi = float(oi_data.get('openInterest', 0))
-            oi_24h_ago = float(oi_history[0].get('openInterest', 0)) if oi_history else current_oi
-            
-            oi_change = (current_oi - oi_24h_ago) / oi_24h_ago if oi_24h_ago > 0 else 0
+            # Try to get historical data for change calculation
+            oi_change = 0
+            try:
+                if hasattr(self.exchange, 'fetch_open_interest_history'):
+                    oi_history = self.exchange.fetch_open_interest_history(symbol, limit=24)
+                    if oi_history and len(oi_history) > 0:
+                        oi_24h_ago = float(oi_history[0].get('openInterest', current_oi))
+                        if oi_24h_ago > 0:
+                            oi_change = (current_oi - oi_24h_ago) / oi_24h_ago
+            except:
+                # Historical data not available, use 0 for change
+                pass
             
             return {
                 'current': current_oi,
@@ -204,8 +215,14 @@ class EnhancedDataCollector:
                 'change_percent_24h': oi_change * 100,
                 'timestamp': pd.Timestamp.now()
             }
+        except ccxt.NotSupported:
+            # This is expected for some exchanges/endpoints
+            self.logger.debug(f"Open interest not supported for {symbol}")
+            return None
         except Exception as e:
-            self.logger.error(f"Error fetching open interest: {e}")
+            # Only log unexpected errors
+            if 'not supported' not in str(e).lower():
+                self.logger.warning(f"Error fetching open interest for {symbol}: {e}")
             return None
     
     def _calculate_order_book_imbalance(self, orderbook: Dict) -> Dict:

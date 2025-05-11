@@ -108,6 +108,7 @@ class TechnicalIndicators:
             self.indicators['bb_squeeze_direction'] = 'none'
         
         # Price position relative to bands
+        current_price = df['close'].iloc[-1]
         if current_price > self.indicators['bb_upper']:
             self.indicators['bb_position'] = 'above'
         elif current_price < self.indicators['bb_lower']:
@@ -128,6 +129,20 @@ class TechnicalIndicators:
         self.indicators['macd_signal'] = macd_indicator.macd_signal().iloc[-1]
         self.indicators['macd_histogram'] = macd_indicator.macd_diff().iloc[-1]
         
+        # MACD crossover
+        if len(df) >= 2:
+            current_macd = macd_indicator.macd().iloc[-1]
+            current_signal = macd_indicator.macd_signal().iloc[-1]
+            prev_macd = macd_indicator.macd().iloc[-2]
+            prev_signal = macd_indicator.macd_signal().iloc[-2]
+            
+            if current_macd > current_signal and prev_macd <= prev_signal:
+                self.indicators['macd_crossover'] = 'bullish'
+            elif current_macd < current_signal and prev_macd >= prev_signal:
+                self.indicators['macd_crossover'] = 'bearish'
+            else:
+                self.indicators['macd_crossover'] = 'none'
+        
         # MACD divergence detection
         if len(df) >= 20:
             self._detect_macd_divergence(df, macd_indicator)
@@ -140,6 +155,7 @@ class TechnicalIndicators:
         # Look for divergences in last 20 bars
         lookback = 20
         if len(df) < lookback:
+            self.indicators['macd_divergence'] = 'none'
             return
         
         # Find local extremes
@@ -200,12 +216,19 @@ class TechnicalIndicators:
         """Calculate volume-based indicators."""
         # Volume analysis
         volume_sma = df['volume'].rolling(window=20).mean()
-        self.indicators['volume_ratio'] = df['volume'].iloc[-1] / volume_sma.iloc[-1]
+        self.indicators['volume_ratio'] = df['volume'].iloc[-1] / volume_sma.iloc[-1] if volume_sma.iloc[-1] > 0 else 1
         self.indicators['volume_sma_20'] = volume_sma.iloc[-1]
         
         # Volume spike detection
         self.indicators['volume_spike'] = self.indicators['volume_ratio'] > Config.VOLUME_SPIKE_THRESHOLD
         self.indicators['volume_spike_extreme'] = self.indicators['volume_ratio'] > Config.VOLUME_SPIKE_EXTREME
+        
+        # One-minute 500% volume spike
+        if len(df) > 1:
+            volume_change = df['volume'].iloc[-1] / df['volume'].iloc[-2] if df['volume'].iloc[-2] > 0 else 1
+            self.indicators['volume_spike_500'] = volume_change > 5.0
+        else:
+            self.indicators['volume_spike_500'] = False
         
         # Volume trend
         volume_ema_short = df['volume'].ewm(span=5).mean()
@@ -215,6 +238,10 @@ class TechnicalIndicators:
             self.indicators['volume_trend'] = 'increasing'
         else:
             self.indicators['volume_trend'] = 'decreasing'
+        
+        # VWAP
+        vwap = (df['volume'] * (df['high'] + df['low'] + df['close']) / 3).cumsum() / df['volume'].cumsum()
+        self.indicators['vwap'] = vwap.iloc[-1]
     
     def calculate_atr(self, df: pd.DataFrame):
         """Calculate ATR for different periods."""
@@ -223,7 +250,7 @@ class TechnicalIndicators:
             high=df['high'], 
             low=df['low'], 
             close=df['close'], 
-            window=14
+            window=Config.ATR_PERIOD
         )
         self.indicators['atr'] = atr_indicator.average_true_range().iloc[-1]
         
@@ -232,7 +259,7 @@ class TechnicalIndicators:
             high=df['high'], 
             low=df['low'], 
             close=df['close'], 
-            window=5
+            window=Config.ATR_PERIOD_SHORT
         )
         self.indicators['atr_short'] = atr_short.average_true_range().iloc[-1]
         
@@ -242,6 +269,7 @@ class TechnicalIndicators:
     def detect_candlestick_patterns(self, df: pd.DataFrame):
         """Detect candlestick patterns."""
         if len(df) < 5:
+            self._set_empty_patterns()
             return
         
         # Current and previous candles
@@ -260,6 +288,13 @@ class TechnicalIndicators:
         
         # Low/High trap patterns
         self._detect_traps(df)
+    
+    def _set_empty_patterns(self):
+        """Set all pattern indicators to 'none'."""
+        self.indicators['pattern_engulfing'] = 'none'
+        self.indicators['pattern_pin_bar'] = 'none'
+        self.indicators['pattern_breakout'] = 'none'
+        self.indicators['pattern_trap'] = 'none'
     
     def _detect_engulfing(self, current: pd.Series, prev: pd.Series):
         """Detect engulfing patterns."""
@@ -287,6 +322,7 @@ class TechnicalIndicators:
         total_range = current['high'] - current['low']
         
         if total_range == 0:
+            self.indicators['pattern_pin_bar'] = 'none'
             return
         
         # Pin bar criteria: small body, long wick
@@ -304,6 +340,7 @@ class TechnicalIndicators:
         """Detect breakout patterns."""
         lookback = 20
         if len(df) < lookback:
+            self.indicators['pattern_breakout'] = 'none'
             return
         
         current_price = df['close'].iloc[-1]
@@ -325,6 +362,7 @@ class TechnicalIndicators:
     def _detect_traps(self, df: pd.DataFrame):
         """Detect low/high trap patterns."""
         if len(df) < 10:
+            self.indicators['pattern_trap'] = 'none'
             return
         
         # Low trap: false breakdown followed by recovery
