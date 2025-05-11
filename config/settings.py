@@ -4,25 +4,23 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
 class Config:
-    # Bitget API Keys
+    # Bitget API
     BITGET_API_KEY = os.getenv('BITGET_API_KEY', '')
     BITGET_API_SECRET = os.getenv('BITGET_API_SECRET', '')
     BITGET_PASSPHRASE = os.getenv('BITGET_PASSPHRASE', '')
     
-    # Trading parameters dla FUTURES
+    # Trading parameters
     TRADING_SYMBOL = 'BTC/USDT:USDT'
-    TIMEFRAME = '1m'  # Dane 1-minutowe
-    HIGH_FREQUENCY_TIMEFRAME = '1m'  # Zmienione z 15s na 1m
-    
-    # Futures specific settings
+    TIMEFRAME = '1m'
     LEVERAGE = 5
     MARGIN_MODE = 'isolated'
-    POSITION_MODE = 'oneway'
     
     # Position sizing
     TRADE_AMOUNT_USDT = 50
     MAX_POSITION_SIZE = 200
+    RISK_PER_TRADE = 0.01  # 1% kapitału na transakcję
     
     # Risk management
     STOP_LOSS_PERCENT = 2.0
@@ -30,61 +28,58 @@ class Config:
     MAX_DAILY_LOSS = 100
     MAX_OPEN_POSITIONS = 3
     
-    # Entry signals
-    RSI_PERIOD = 14
-    RSI_OVERSOLD = 30
-    RSI_OVERBOUGHT = 70
+    # Penalty thresholds
+    SMALL_LOSS_THRESHOLD = 0.005  # 0.5% straty = kara ×3
+    BIG_LOSS_THRESHOLD = 0.01     # 1% straty = wykluczenie sygnałów
+    PENALTY_MULTIPLIER = 3        # Mnożnik kary
+    EXCLUSION_PERIOD = 3600       # Czas wykluczenia w sekundach (1 godzina)
     
-    # Scalping RSI thresholds
-    RSI_EXTREME_OVERSOLD = 25
-    RSI_EXTREME_OVERBOUGHT = 75
-    
-    # Trend filters
+    # Technical indicators
+    RSI_PERIODS = [5, 6, 7, 8, 9, 10, 14]  # Różne okresy RSI
+    RSI_OVERSOLD = 25
+    RSI_OVERBOUGHT = 75
     EMA_FAST = 9
     EMA_SLOW = 21
+    ATR_PERIOD = 14
+    ATR_PERIOD_SHORT = 5
     
-    # Volume filter
-    MIN_VOLUME_MULTIPLIER = 1.5
+    # Volume thresholds
     VOLUME_SPIKE_THRESHOLD = 5.0  # 500% wzrost
-    VOLUME_EXTREME_THRESHOLD = 3.0  # 300% powyżej średniej
+    VOLUME_SPIKE_EXTREME = 3.0    # 300% powyżej średniej
     
     # Order book parameters
     ORDER_BOOK_DEPTH = 20
-    SLIPPAGE_THRESHOLD = 0.5
+    ORDER_BOOK_LEVELS = 2  # L2 depth
     LIQUIDITY_MIN_THRESHOLD = 10000
+    ORDER_BOOK_IMBALANCE_THRESHOLD = 0.3
+    SPREAD_MULTIPLIER = 2  # Stop-loss = 2× spread
     
-    # Sentiment analysis parameters
-    SENTIMENT_WEIGHT = 0.2
-    SENTIMENT_UPDATE_INTERVAL = 300  # Co 5 minut
+    # Session timing (UTC)
+    ASIAN_SESSION = (0, 8)    # 00:00 - 08:00
+    EUROPEAN_SESSION = (7, 16) # 07:00 - 16:00
+    US_SESSION = (13, 22)      # 13:00 - 22:00
+    HIGH_LIQUIDITY_HOURS = (13, 16)  # Overlap EU/US
     
-    # System settings
-    CHECK_INTERVAL = 30  # Sprawdzanie co 30 sekund dla skalpowania
-    LOG_LEVEL = 'INFO'
-    
-    # Safety
-    USE_TESTNET = False
-    PAPER_TRADING = True
-    
-    # Telegram notifications
-    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
-    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
-    
-    # Social Media APIs
+    # Sentiment analysis
+    SENTIMENT_UPDATE_INTERVAL = 300  # 5 minut
     TWITTER_BEARER_TOKEN = os.getenv('TWITTER_BEARER_TOKEN', '')
     CRYPTOPANIC_API_KEY = os.getenv('CRYPTOPANIC_API_KEY', '')
     
-    # Scalping Parameters
+    # Machine Learning
+    USE_ML_MODELS = False  # Domyślnie wyłączone
+    LSTM_LOOKBACK = 60    # Okres lookback dla LSTM
+    ENSEMBLE_MODELS = 3   # Liczba modeli w ensemble
+    
+    # Scalping parameters
     SCALPING_ENABLED = True
-    SCALPING_MIN_PROFIT_PERCENT = 0.1  # Minimalny zysk 0.1% dla skalpowania
-    SCALPING_MAX_HOLD_TIME = 300  # Maksymalny czas trzymania pozycji (5 minut)
-    SCALPING_STOP_LOSS = 1.0  # Stop loss 1% dla skalpowania
-    SCALPING_TAKE_PROFIT = 1.5  # Take profit 1.5% dla skalpowania
+    SCALPING_MIN_PROFIT_PERCENT = 0.1
+    SCALPING_MAX_HOLD_TIME = 300  # 5 minutes
     
-    # Order Book Trading Parameters
-    ORDER_BOOK_IMBALANCE_THRESHOLD = 0.3
-    LARGE_ORDER_MULTIPLIER = 5
+    # System settings
+    CHECK_INTERVAL = 30  # Sprawdzanie co 30 sekund
+    LOG_LEVEL = 'INFO'
+    PAPER_TRADING = True
     
-    # Market Making Parameters
-    MARKET_MAKING_ENABLED = False
-    MARKET_MAKING_SPREAD = 0.05  # Spread 0.05%
-    MARKET_MAKING_SIZE = 10  # Wielkość zlecenia w USDT
+    # Notifications
+    TELEGRAM_BOT_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN', '')
+    TELEGRAM_CHAT_ID = os.getenv('TELEGRAM_CHAT_ID', '')
