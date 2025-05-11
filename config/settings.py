@@ -42,9 +42,11 @@ class Config:
     RSI_EXTREME_OVERSOLD = 20
     RSI_EXTREME_OVERBOUGHT = 80
     
-    # EMA periods
+    # EMA periods (aliasy dla kompatybilności)
     EMA_SHORT = 9
     EMA_LONG = 21
+    EMA_FAST = 9  # Alias dla EMA_SHORT
+    EMA_SLOW = 21  # Alias dla EMA_LONG
     EMA_VERY_SHORT = 5
     EMA_TREND = 50
     
@@ -60,6 +62,10 @@ class Config:
     BB_PERIOD = 20
     BB_STD = 2
     BB_SQUEEZE_THRESHOLD = 0.02  # 2% for squeeze detection
+    
+    # ATR
+    ATR_PERIOD = 14
+    ATR_PERIOD_SHORT = 5
     
     # Volume thresholds
     VOLUME_SPIKE_THRESHOLD = 5.0  # 500% wzrost
