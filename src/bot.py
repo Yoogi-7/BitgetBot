@@ -10,10 +10,12 @@ from src.market_analyzer import MarketAnalyzer
 from src.logger import TradeLogger
 from src.notifier import TelegramNotifier
 from src.risk_manager import RiskManager
+from src.security_filters import SecurityFilters
+from src.kpi_tracker import KPITracker
 
 
 class TradingBot:
-    """Enhanced trading bot with risk management."""
+    """Enhanced trading bot with security filters and KPI tracking."""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -25,16 +27,20 @@ class TradingBot:
         self.trade_logger = TradeLogger()
         self.notifier = TelegramNotifier()
         self.risk_manager = RiskManager()
+        self.security_filters = SecurityFilters()
+        self.kpi_tracker = KPITracker()
         
         # State management
         self.positions = []
         self.daily_pnl = 0.0
         self.trades_today = 0
+        self.daily_starting_balance = 0.0
         
         # Paper trading state
         if Config.PAPER_TRADING:
             self.paper_balance = 1000.0
             self.paper_positions = []
+            self.daily_starting_balance = self.paper_balance
         
         self._initialize()
     
@@ -48,6 +54,8 @@ class TradingBot:
             balance = self.exchange.get_balance()
             if balance:
                 self.logger.info(f"Account balance: {balance['available']:.2f} USDT")
+                if not Config.PAPER_TRADING:
+                    self.daily_starting_balance = balance['available']
             
             # Check existing positions
             self.positions = self.exchange.get_positions()
@@ -80,7 +88,13 @@ class TradingBot:
                 time.sleep(60)  # Wait before retry
     
     def _trading_cycle(self):
-        """Execute single trading cycle."""
+        """Execute single trading cycle with security and KPI checks."""
+        # Check daily drawdown limit
+        current_balance = self._get_available_balance()
+        if not self.kpi_tracker.check_daily_drawdown(current_balance, self.daily_starting_balance):
+            self.logger.warning("Daily drawdown limit reached - pausing trading")
+            return
+        
         # Check risk limits
         if not self._check_risk_limits():
             return
@@ -90,16 +104,40 @@ class TradingBot:
         if not market_data:
             return
         
+        # Check for market anomalies BEFORE analysis
+        anomaly_check = self.security_filters.check_market_anomaly(market_data)
+        if anomaly_check['is_anomaly'] and anomaly_check['recommendation'] == 'block_signal':
+            self.logger.warning(f"Market anomaly detected - blocking signals: {anomaly_check['anomaly_type']}")
+            return
+        
         # Analyze market
         analysis = self.market_analyzer.analyze(market_data)
         
         # Generate trading signal
         signal = self.strategy.generate_signal(market_data, analysis, self.positions)
         
+        # Process signal through KPI tracker
+        kpi_signal = self.kpi_tracker.process_signal_flow(market_data, signal.get('indicators', {}))
+        
+        # Merge signals
+        if kpi_signal['action']:
+            signal.update(kpi_signal)
+        
         # Check if strategy is allowed by risk manager
         if signal.get('action') == 'OPEN':
             if not self.risk_manager.is_strategy_allowed(signal.get('reason', '')):
                 self.logger.warning(f"Strategy '{signal['reason']}' is temporarily excluded")
+                return
+            
+            # Ensure ethical trading
+            if not self.security_filters.ensure_ethical_trading(signal):
+                self.logger.warning("Signal blocked for ethical reasons")
+                return
+            
+            # Check if confirmation needed due to anomaly
+            if anomaly_check['is_anomaly'] and anomaly_check['recommendation'] == 'require_confirmation':
+                self.logger.info("Signal requires confirmation due to market anomaly")
+                # In production, would wait for second model confirmation
                 return
         
         # Log current state
@@ -166,11 +204,17 @@ class TradingBot:
             
             position_size_btc = position_size_usd / signal['entry_price']
             
-            # Calculate stop loss based on spread and ATR
-            spread = analysis.get('spread', 0.001)
-            stop_loss = self.risk_manager.calculate_stop_loss(
-                signal['entry_price'], signal['side'], spread, atr
-            )
+            # Calculate stop loss from KPI signal
+            stop_loss = signal.get('stop_loss')
+            if not stop_loss:
+                # Fallback to spread and ATR based calculation
+                spread = analysis.get('spread', 0.001)
+                stop_loss = self.risk_manager.calculate_stop_loss(
+                    signal['entry_price'], signal['side'], spread, atr
+                )
+            
+            # Calculate risk amount for KPI tracking
+            risk_amount = abs(signal['entry_price'] - stop_loss) * position_size_btc
             
             # Place order
             order = self.exchange.place_order(
@@ -184,14 +228,17 @@ class TradingBot:
                     'id': order['id'],
                     'side': signal['side'],
                     'entry_price': signal['entry_price'],
+                    'entry_time': datetime.now(),
                     'size': position_size_btc,
                     'size_usd': position_size_usd,
                     'opened_at': datetime.now(),
                     'stop_loss': stop_loss,
                     'take_profit': signal.get('take_profit'),
+                    'exit_time': signal.get('exit_time'),
                     'reason': signal['reason'],
                     'atr': atr,
-                    'spread': spread
+                    'spread': analysis.get('spread', 0.001),
+                    'risk_amount': risk_amount
                 }
                 
                 if Config.PAPER_TRADING:
@@ -212,7 +259,7 @@ class TradingBot:
                     'stop_loss': stop_loss,
                     'take_profit': signal.get('take_profit'),
                     'atr': atr,
-                    'spread': spread,
+                    'spread': analysis.get('spread', 0.001),
                     'confidence': signal['confidence']
                 }
                 self.trade_logger.log_trade(trade_data)
@@ -262,6 +309,7 @@ class TradingBot:
                 # Calculate PnL
                 current_price = order.get('price', position['entry_price'])
                 pnl = self._calculate_pnl(position, current_price)
+                pnl_percent = (pnl / position['size_usd']) * 100
                 
                 # Update state
                 if Config.PAPER_TRADING:
@@ -278,13 +326,20 @@ class TradingBot:
                     'side': position['side'],
                     'entry_price': position['entry_price'],
                     'exit_price': current_price,
+                    'entry_time': position['entry_time'],
+                    'exit_time': datetime.now(),
                     'size': position['size_usd'],
                     'pnl': pnl,
+                    'pnl_percent': pnl_percent,
                     'reason': reason,
-                    'hold_time': (datetime.now() - position['opened_at']).total_seconds()
+                    'hold_time': (datetime.now() - position['opened_at']).total_seconds(),
+                    'risk_amount': position.get('risk_amount', 0)
                 }
                 self.trade_logger.log_trade(trade_data)
                 self.risk_manager.record_trade(trade_data)
+                
+                # Track KPIs
+                self.kpi_tracker.track_trade_kpi(trade_data)
                 
                 # Notify
                 self.notifier.notify_trade_closed(
@@ -295,7 +350,6 @@ class TradingBot:
                     reason
                 )
                 
-                pnl_percent = (pnl / position['size_usd']) * 100
                 self.logger.info(
                     f"Closed {position['side']} position. "
                     f"PnL: {pnl:.2f} USDT ({pnl_percent:.2f}%)"
@@ -305,7 +359,7 @@ class TradingBot:
             self.logger.error(f"Error closing position: {e}")
     
     def _manage_positions(self):
-        """Manage existing positions with dynamic stop loss."""
+        """Manage existing positions with dynamic stop loss and time-based exits."""
         positions = self.paper_positions if Config.PAPER_TRADING else self.positions
         
         for position in positions[:]:  # Copy list for iteration
@@ -320,12 +374,16 @@ class TradingBot:
                 if self._should_close_position(position, current_price):
                     self._execute_close(position, "Risk management trigger")
                     
+                # Check time-based exit
+                elif position.get('exit_time') and datetime.now() >= position['exit_time']:
+                    self._execute_close(position, "Time-based exit")
+                    
             except Exception as e:
                 self.logger.error(f"Error managing position: {e}")
     
     def _should_close_position(self, position: Dict, current_price: float) -> bool:
         """Check if position should be closed based on risk management."""
-        # Check custom stop loss (based on spread and ATR)
+        # Check custom stop loss
         if position.get('stop_loss'):
             if position['side'] == 'long' and current_price <= position['stop_loss']:
                 return True
@@ -339,8 +397,8 @@ class TradingBot:
             elif position['side'] == 'short' and current_price <= position['take_profit']:
                 return True
         
-        # Scalping time limit
-        if Config.SCALPING_ENABLED and position.get('opened_at'):
+        # Scalping time limit (if no specific exit time set)
+        if Config.SCALPING_ENABLED and position.get('opened_at') and not position.get('exit_time'):
             hold_time = (datetime.now() - position['opened_at']).total_seconds()
             if hold_time > Config.SCALPING_MAX_HOLD_TIME:
                 return True
@@ -398,13 +456,18 @@ class TradingBot:
                 self.logger.info(f"Risk metrics: {risk_metrics}")
     
     def _shutdown(self):
-        """Cleanup on shutdown."""
+        """Cleanup on shutdown with KPI report."""
+        # Generate KPI report
+        kpi_report_file = self.kpi_tracker.export_kpi_report()
+        
         # Generate daily summary
         summary = self.trade_logger.generate_daily_summary({
             'trades_today': self.trades_today,
             'daily_pnl': self.daily_pnl,
             'final_balance': self._get_available_balance(),
-            'risk_metrics': self.risk_manager.get_risk_metrics()
+            'risk_metrics': self.risk_manager.get_risk_metrics(),
+            'kpi_summary': self.kpi_tracker.get_kpi_summary(),
+            'anomaly_stats': self.security_filters.get_anomaly_statistics()
         })
         
         # Send notifications
@@ -412,4 +475,4 @@ class TradingBot:
         if summary:
             self.notifier.notify_daily_summary(summary)
         
-        self.logger.info("Bot shutdown complete")
+        self.logger.info(f"Bot shutdown complete. KPI report saved to {kpi_report_file}")
