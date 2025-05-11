@@ -6,6 +6,7 @@ import logging
 from datetime import datetime
 from src.bot import TradingBot
 from config.settings import Config
+from src.multi_symbol_bot import MultiSymbolTradingBot
 
 
 def setup_logging():
@@ -38,6 +39,11 @@ def signal_handler(signum, frame):
 
 
 def main():
+if MULTI_SYMBOL_MODE:
+    bot = MultiSymbolTradingBot()
+else:
+    bot = TradingBot()
+
     """Main entry point."""
     # Setup signal handlers for graceful shutdown
     signal.signal(signal.SIGINT, signal_handler)
