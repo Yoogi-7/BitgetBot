@@ -2,7 +2,7 @@
 import logging
 import time
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple  # Dodany Tuple
 from config.settings import Config
 from src.exchange import ExchangeConnector
 from src.data_collector import EnhancedDataCollector

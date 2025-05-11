@@ -11,14 +11,14 @@ class Config:
     BITGET_API_SECRET = os.getenv('BITGET_API_SECRET', '')
     BITGET_PASSPHRASE = os.getenv('BITGET_PASSPHRASE', '')
     
-    # Trading symbols - Multi-symbol support
+    # Trading symbols - Multi-symbol support (updated list)
     TRADING_SYMBOLS = [
         'BTC/USDT:USDT',
         'ETH/USDT:USDT',
         'SOL/USDT:USDT',
         'AVAX/USDT:USDT',
         'XRP/USDT:USDT',
-        'MATIC/USDT:USDT',
+        'POL/USDT:USDT',    # Changed from MATIC
         'DOGE/USDT:USDT',
         'DOT/USDT:USDT',
         'LINK/USDT:USDT',
@@ -33,12 +33,12 @@ class Config:
     TIMEFRAMES = ['1m', '3m', '5m']
     DEFAULT_TIMEFRAME = '1m'
     
-    # Dynamic filtering thresholds
-    MIN_VOLATILITY = 0.005          # 0.5% minimum volatility (ATR/Price)
-    MIN_VOLUME_USD = 1000000        # $1M minimum 24h volume
-    MIN_VOLUME_RATIO = 0.5          # Current volume vs average
-    MIN_LIQUIDITY_USD = 50000       # $50k minimum in order book
-    MIN_SPREAD_LIQUIDITY = 0.002    # 0.2% max spread for liquidity
+    # Dynamic filtering thresholds (relaxed for testing)
+    MIN_VOLATILITY = 0.002          # 0.2% minimum volatility (was 0.5%)
+    MIN_VOLUME_USD = 100000         # $100k minimum 24h volume (was $1M)
+    MIN_VOLUME_RATIO = 0.3          # Current volume vs average (was 0.5)
+    MIN_LIQUIDITY_USD = 10000       # $10k minimum in order book (was $50k)
+    MIN_SPREAD_LIQUIDITY = 0.005    # 0.5% max spread for liquidity (was 0.2%)
     
     # Signal strength thresholds
     MIN_SIGNAL_STRENGTH = 65        # Minimum signal strength (0-100)
@@ -46,7 +46,7 @@ class Config:
     WEAK_SIGNAL_THRESHOLD = 50      # Weak signal threshold
     
     # Sentiment alignment
-    SENTIMENT_ALIGNMENT_REQUIRED = True
+    SENTIMENT_ALIGNMENT_REQUIRED = False  # Disabled for initial testing
     SENTIMENT_DISAGREEMENT_PENALTY = 20  # Penalty for sentiment mismatch
     
     # Correlation settings
@@ -111,9 +111,9 @@ class Config:
     ATR_PERIOD = 14
     ATR_PERIOD_SHORT = 5
     
-    # Volume thresholds
-    VOLUME_SPIKE_THRESHOLD = 5.0  # 500% wzrost
-    VOLUME_SPIKE_EXTREME = 3.0    # 300% powyżej średniej
+    # Volume thresholds (relaxed)
+    VOLUME_SPIKE_THRESHOLD = 3.0  # 300% wzrost (was 500%)
+    VOLUME_SPIKE_EXTREME = 2.0    # 200% powyżej średniej (was 300%)
     
     # Order book parameters
     ORDER_BOOK_DEPTH = 20
