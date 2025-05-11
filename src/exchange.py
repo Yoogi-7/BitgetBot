@@ -7,7 +7,7 @@ from config.settings import Config
 
 
 class ExchangeConnector:
-    """Enhanced exchange connection with high-frequency data support."""
+    """Exchange connection handler."""
     
     def __init__(self):
         self.logger = logging.getLogger(__name__)
@@ -32,9 +32,6 @@ class ExchangeConnector:
             self.exchange.load_markets()
             ticker = self.exchange.fetch_ticker(Config.TRADING_SYMBOL)
             self.logger.info(f"Connected to Bitget. BTC Price: {ticker['last']}")
-            
-            # Check available timeframes
-            self.logger.info(f"Available timeframes: {self.exchange.timeframes}")
             
         except Exception as e:
             self.logger.error(f"Failed to connect to exchange: {e}")
@@ -98,21 +95,13 @@ class ExchangeConnector:
     def get_ohlcv(self, symbol: str = Config.TRADING_SYMBOL, 
                   timeframe: str = Config.TIMEFRAME, 
                   limit: int = 100) -> Optional[pd.DataFrame]:
-        """Get OHLCV data with support for high-frequency timeframes."""
+        """Get OHLCV data."""
         try:
-            # Check if timeframe is supported
-            if timeframe not in self.exchange.timeframes:
-                # Fallback for unsupported timeframes
-                if timeframe == '15s':
-                    self.logger.warning(f"Timeframe {timeframe} not supported, using 1m")
-                    timeframe = '1m'
-                    limit = min(limit, 20)  # Reduce limit for higher frequency
-            
             ohlcv = self.exchange.fetch_ohlcv(symbol, timeframe, limit=limit)
             df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
             df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
             
-            # Add derived features for high-frequency analysis
+            # Add derived features
             df['price_change'] = df['close'].pct_change()
             df['volume_change'] = df['volume'].pct_change()
             

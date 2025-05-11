@@ -117,14 +117,8 @@ class TradingBot:
     def _get_market_data(self) -> Optional[Dict]:
         """Fetch comprehensive market data."""
         try:
-            # Get OHLCV data for both timeframes
+            # Get OHLCV data
             ohlcv = self.exchange.get_ohlcv(timeframe=Config.TIMEFRAME, limit=100)
-            
-            # Try to get high frequency data if available
-            ohlcv_hf = None
-            if Config.HIGH_FREQUENCY_TIMEFRAME == '15s':
-                # Many exchanges don't support 15s, fallback to 1m
-                ohlcv_hf = self.exchange.get_ohlcv(timeframe='1m', limit=20)
             
             if ohlcv is None or ohlcv.empty:
                 return None
@@ -136,7 +130,6 @@ class TradingBot:
             
             return {
                 'ohlcv': ohlcv,
-                'ohlcv_hf': ohlcv_hf,
                 'ticker': ticker,
                 'order_book': order_book,
                 'recent_trades': recent_trades

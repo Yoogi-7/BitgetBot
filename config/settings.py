@@ -14,7 +14,6 @@ class Config:
     # Trading parameters
     TRADING_SYMBOL = 'BTC/USDT:USDT'
     TIMEFRAME = '1m'
-    HIGH_FREQUENCY_TIMEFRAME = '15s'  # Dla wysokiej częstotliwości
     LEVERAGE = 5
     MARGIN_MODE = 'isolated'
     
@@ -77,7 +76,7 @@ class Config:
     SCALPING_MAX_HOLD_TIME = 300  # 5 minutes
     
     # System settings
-    CHECK_INTERVAL = 15  # Sprawdzanie co 15 sekund dla wysokiej częstotliwości
+    CHECK_INTERVAL = 30  # Sprawdzanie co 30 sekund
     LOG_LEVEL = 'INFO'
     PAPER_TRADING = True
     
